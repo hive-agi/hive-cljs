@@ -1,0 +1,216 @@
+(ns hive-cljs.shadow.relay
+  "IBuildTool adapter over the shadow-cljs remote-relay websocket.
+
+   Transport only: message folding lives in `hive-cljs.shadow.sync-db`, status
+   promotion in `hive-cljs.verdict`, wire vocabulary in `hive-cljs.profile`."
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [cognitect.transit :as transit]
+            [gniazdo.core :as ws]
+            [hive-cljs.ports :as ports]
+            [hive-cljs.profile :as profile]
+            [hive-cljs.shadow.sync-db :as sync-db]
+            [hive-cljs.verdict :as verdict]
+            [hive-dsl.result :as r]
+            [taoensso.timbre :as log])
+  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]))
+
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;;
+;; SPDX-License-Identifier: MIT
+
+;; =============================================================================
+;; Transit framing
+;; =============================================================================
+
+(defn write-transit
+  "Encode a message map as a transit-json string."
+  [msg]
+  (let [out (ByteArrayOutputStream. 4096)]
+    (transit/write (transit/writer out :json) msg)
+    (.toString out "UTF-8")))
+
+(defn read-transit
+  "Decode a transit-json string, or nil when it is not readable."
+  [s]
+  (try
+    (transit/read (transit/reader (ByteArrayInputStream. (.getBytes ^String s "UTF-8")) :json))
+    (catch Exception e
+      (log/debug "hive-cljs relay: undecodable frame" (.getMessage e))
+      nil)))
+
+;; =============================================================================
+;; Server token
+;; =============================================================================
+
+(defn http-root
+  [{:keys [host port]}]
+  (str "http://" host ":" port))
+
+(defn fetch-token
+  "Scrape the shadow-remote-token meta tag from the server's index page.
+   Returns a Result of the token string."
+  [prof conn]
+  (try
+    (let [body (slurp (io/reader (str (http-root conn) "/")))
+          [_ token] (re-find (:relay/token-pattern prof) body)]
+      (if (str/blank? token)
+        (r/err :relay/token-not-found {:url (http-root conn)})
+        (r/ok token)))
+    (catch Exception e
+      (r/err :relay/server-unreachable {:url (http-root conn) :cause (.getMessage e)}))))
+
+(defn relay-url
+  [prof conn token]
+  (str "ws://" (:host conn) ":" (:port conn) (:relay/path prof)
+       "?id=" (:relay/client-id prof) "&server-token=" token))
+
+;; =============================================================================
+;; State
+;; =============================================================================
+
+(defn- initial-state []
+  {:db          (sync-db/empty-db)
+   :subs        {}
+   :connected?  false
+   :client-id   nil
+   :socket      nil
+   :last-error  nil})
+
+(defn- notify-subs!
+  [state-ref prof build-ids]
+  (let [{:keys [db subs]} @state-ref]
+    (doseq [bid build-ids
+            [k f] subs]
+      (let [status (verdict/build-status prof bid (sync-db/raw-status db prof bid))
+            event  {:event/build bid
+                    :event/status status
+                    :event/at (System/currentTimeMillis)}]
+        (try (f event)
+             (catch Exception e
+               (log/warn "hive-cljs relay: subscriber" k "threw" (.getMessage e))))))))
+
+(defn- send!
+  [state-ref msg]
+  (if-let [sock (:socket @state-ref)]
+    (do (ws/send-msg sock (write-transit msg)) (r/ok true))
+    (r/err :relay/not-connected {})))
+
+(defn- server-msg
+  "A message addressed to the shadow server runtime."
+  [prof op extra]
+  (merge {:op op :to (:relay/server-runtime-id prof)} extra))
+
+(defn- handle-msg!
+  [state-ref prof msg]
+  (let [op (:op msg)]
+    (cond
+      (= op (:relay/welcome-op prof))
+      (do (swap! state-ref assoc :client-id (:client-id msg) :connected? true)
+          (send! state-ref {:op (:relay/hello-op prof)
+                            :client-info (:relay/client-info prof)})
+          (send! state-ref (server-msg prof (:relay/db-sync-init-op prof) {})))
+
+      (= op (:relay/ping-op prof))
+      (send! state-ref {:op (:relay/pong-op prof)})
+
+      (= op (:relay/db-sync-op prof))
+      (swap! state-ref update :db sync-db/apply-snapshot prof msg)
+
+      (= op (:relay/db-update-op prof))
+      (let [changed (sync-db/changed-builds prof (:changes msg))]
+        (swap! state-ref update :db sync-db/apply-changes prof (:changes msg))
+        (when (seq changed) (notify-subs! state-ref prof changed)))
+
+      :else nil)))
+
+;; =============================================================================
+;; Adapter
+;; =============================================================================
+
+(defrecord ShadowRelay [prof conn state-ref]
+  ports/IBuildTool
+  (builds [_]
+    (r/ok (sync-db/build-ids (:db @state-ref))))
+
+  (build-status [_ build-id]
+    (let [db (:db @state-ref)]
+      (r/ok (if-let [raw (sync-db/raw-status db prof build-id)]
+              (verdict/build-status prof build-id raw)
+              (verdict/unknown-status build-id)))))
+
+  (compile-once! [this build-id]
+    (let [op (if (sync-db/worker-active? (:db @state-ref) prof build-id)
+               (:relay/watch-compile-op prof)
+               (:relay/compile-op prof))
+          sent (send! state-ref
+                      (server-msg prof op {(:relay/build-id-arg prof) build-id}))]
+      (if (r/err? sent)
+        sent
+        (ports/build-status this build-id))))
+
+  (subscribe! [_ k f]
+    (swap! state-ref assoc-in [:subs k] f)
+    (r/ok k))
+
+  (unsubscribe! [_ k]
+    (swap! state-ref update :subs dissoc k)
+    (r/ok k)))
+
+(defn connected?
+  [^ShadowRelay relay]
+  (boolean (:connected? @(:state-ref relay))))
+
+(defn snapshot
+  "Current sync-db view — diagnostics."
+  [^ShadowRelay relay]
+  (:db @(:state-ref relay)))
+
+(defn connect!
+  "Open a relay connection. Returns a Result of a `ShadowRelay`.
+
+   conn: {:host str :port int}"
+  ([conn] (connect! (profile/relay-profile) conn))
+  ([prof conn]
+   (r/bind
+    (fetch-token prof conn)
+    (fn [token]
+      (let [state-ref (atom (initial-state))]
+        (try
+          (let [sock (ws/connect
+                      (relay-url prof conn token)
+                      :on-receive (fn [s]
+                                    (when-let [msg (read-transit s)]
+                                      (try (handle-msg! state-ref prof msg)
+                                           (catch Exception e
+                                             (log/warn "hive-cljs relay: handler threw"
+                                                       (.getMessage e))))))
+                      :on-error   (fn [e]
+                                    (swap! state-ref assoc :last-error (str e)))
+                      :on-close   (fn [_ _]
+                                    (swap! state-ref assoc :connected? false)))]
+            (swap! state-ref assoc :socket sock)
+            (r/ok (->ShadowRelay prof conn state-ref)))
+          (catch Exception e
+            (r/err :relay/connect-failed {:cause (.getMessage e)
+                                          :url (relay-url prof conn "<token>")}))))))))
+
+(defn await-ready!
+  "Block until the welcome handshake lands or `timeout-ms` elapses.
+   Returns a Result of the relay."
+  [relay timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (cond
+        (connected? relay) (r/ok relay)
+        (> (System/currentTimeMillis) deadline)
+        (r/err :relay/handshake-timeout {:timeout-ms timeout-ms})
+        :else (do (Thread/sleep 50) (recur))))))
+
+(defn disconnect!
+  "Close the relay socket. Idempotent."
+  [^ShadowRelay relay]
+  (when-let [sock (:socket @(:state-ref relay))]
+    (try (ws/close sock) (catch Exception _ nil)))
+  (swap! (:state-ref relay) assoc :socket nil :connected? false)
+  (r/ok nil))

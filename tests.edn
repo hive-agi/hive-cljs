@@ -1,0 +1,7 @@
+#kaocha/v1
+{:tests [{:id :unit
+          :test-paths ["test"]
+          :ns-patterns ["hive-cljs\\..*-test$"]}
+         {:id :property
+          :test-paths ["test"]
+          :ns-patterns ["hive-cljs\\..*-property-test$"]}]}
