@@ -3,7 +3,9 @@
    MCP input schema, and the handler that routes a call."
   (:require [clojure.string :as str]
             [hive-cljs.addon.handlers :as h]
-            [hive-dsl.result :as r]))
+            [hive-dsl.result :as r]
+            [clojure.pprint :as pp]
+            [hive-addon.cli.response :as response]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -67,6 +69,13 @@
         (r/err :cljs/unknown-command {:command c
                                       :known (vec (sort (keys subcommands)))})))))
 
+(defn ->response
+  "Render a handler Result as the host's tool-result shape."
+  [result]
+  (if (r/err? result)
+    (response/error (pr-str result))
+    (response/text (with-out-str (pp/pprint (:ok result))))))
+
 ;; =============================================================================
 ;; `code cljs …` subdomain — contributed to the host's consolidated code tool
 ;; =============================================================================
@@ -86,9 +95,10 @@
       s)))
 
 (defn dispatch-subdomain
-  "Handler for `code cljs <cmd>`: strip the prefix, then dispatch normally."
+  "Handler for `code cljs <cmd>`: strip the prefix, dispatch, render."
   [params]
-  (dispatch (assoc params :command (strip-subdomain-prefix (:command params)))))
+  (->response
+   (dispatch (assoc params :command (strip-subdomain-prefix (:command params))))))
 
 (def code-contributions
   "The `cljs` subdomain contributed to the consolidated `code` tool."

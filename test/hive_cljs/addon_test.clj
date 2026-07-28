@@ -63,18 +63,26 @@
   (testing "a command merely starting with the letters cljs is not truncated"
     (is (= "cljsomething" (registry/strip-subdomain-prefix "cljsomething")))))
 
-(deftest subdomain-dispatch-routes-like-the-bare-tool
-  (testing "code cljs help reaches help"
+(deftest subdomain-dispatch-renders-the-host-tool-result-shape
+  (testing "a success renders as the host's {:type \"text\"} content, not a raw Result"
     (let [res (registry/dispatch-subdomain {:command "cljs help"})]
-      (is (r/ok? res))
-      (is (= (count registry/subcommands) (count (get-in res [:ok :subcommands]))))))
-  (testing "code cljs <unknown> is a typed error"
-    (is (= :cljs/unknown-command
-           (:error (registry/dispatch-subdomain {:command "cljs frobnicate"})))))
+      (is (= "text" (:type res)))
+      (is (string? (:text res)))
+      (is (not (:isError res)))
+      (is (re-find #"doctor" (:text res)))))
+  (testing "a failure renders as an error result carrying the category"
+    (let [res (registry/dispatch-subdomain {:command "cljs frobnicate"})]
+      (is (= "text" (:type res)))
+      (is (true? (:isError res)))
+      (is (re-find #"unknown-command" (:text res)))))
   (testing "a multi-word subcommand survives the strip"
-    (is (= :manifest/not-found
-           (:error (registry/dispatch-subdomain {:command "cljs e2e list"
-                                                 :directory "/tmp/hive-cljs-absent"}))))))
+    (let [res (registry/dispatch-subdomain {:command "cljs e2e list"
+                                            :directory "/tmp/hive-cljs-absent"})]
+      (is (true? (:isError res)))
+      (is (re-find #"manifest/not-found" (:text res)))))
+  (testing "the bare dispatch still returns a raw Result for in-process callers"
+    (is (r/ok? (registry/dispatch {:command "help"})))
+    (is (= :cljs/unknown-command (:error (registry/dispatch {:command "frobnicate"}))))))
 
 (deftest health-reports-without-any-project
   (let [a (addon/addon-ctor {})]
