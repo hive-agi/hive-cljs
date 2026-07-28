@@ -20,6 +20,11 @@
 (def tools    registry/tools)
 (def dispatch registry/dispatch)
 
+;; `code cljs …` subdomain surface
+(def subdomain          registry/subdomain)
+(def code-contributions registry/code-contributions)
+(def dispatch-subdomain registry/dispatch-subdomain)
+
 (def addon-id      lifecycle/addon-id)
 (def addon-ctor    lifecycle/addon-ctor)
 (def init-as-addon! lifecycle/init-as-addon!)

@@ -67,6 +67,54 @@
         (r/err :cljs/unknown-command {:command c
                                       :known (vec (sort (keys subcommands)))})))))
 
+;; =============================================================================
+;; `code cljs …` subdomain — contributed to the host's consolidated code tool
+;; =============================================================================
+
+(declare tool-def)
+
+(def subdomain "cljs")
+
+(defn strip-subdomain-prefix
+  "Drop the `cljs ` subdomain prefix from a `code cljs <cmd>` command,
+   yielding the bare subcommand."
+  [cmd]
+  (let [s (str cmd)
+        p (str subdomain " ")]
+    (if (and (>= (count s) (count p)) (= p (subs s 0 (count p))))
+      (subs s (count p))
+      s)))
+
+(defn dispatch-subdomain
+  "Handler for `code cljs <cmd>`: strip the prefix, then dispatch normally."
+  [params]
+  (dispatch (assoc params :command (strip-subdomain-prefix (:command params)))))
+
+(def code-contributions
+  "The `cljs` subdomain contributed to the consolidated `code` tool."
+  {subdomain
+   {:handler     dispatch-subdomain
+    :description
+    (str "ClojureScript development — shadow-cljs build status, cljs-eval in the "
+         "running runtime, Playwright e2e scenarios and build→e2e watching. "
+         "Subcommands: " (str/join ", " (sort (keys subcommands))) ", help. "
+         "Driven by hive-cljs.edn at the project root. "
+         "Use `code cljs help` to list all.")}})
+
+(def ^:private host-core-params
+  "Parameter names the consolidated code tool already owns — never re-contributed."
+  (into #{} (mapcat (fn [n] [n (keyword n)]))
+        #{"command" "code" "symbol" "prefix" "pattern" "mode" "session_name"
+          "name" "port" "host" "timeout" "project_dir" "repl_type" "file_path"
+          "line" "template" "file" "path" "namespace" "function" "query"
+          "depth" "limit" "directory" "scope"}))
+
+(defn code-schema-ext
+  "This tool's inputSchema properties minus the ones the code tool already
+   declares — merged into the code tool via the schema-extensions seam."
+  []
+  (apply dissoc (get-in tool-def [:inputSchema :properties] {}) host-core-params))
+
 (def tool-def
   {:name "cljs"
    :description

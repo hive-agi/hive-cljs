@@ -2,6 +2,7 @@
   "IAddon record and constructor for the hive.cljs addon."
   (:require [hive-addon.protocol :as proto]
             [hive-cljs.addon.handlers :as h]
+            [hive-cljs.addon.host :as host]
             [hive-cljs.addon.registry :as registry]
             [hive-cljs.browser.factory :as browser]
             [hive-cljs.system :as system]))
@@ -12,6 +13,14 @@
 
 (def addon-id "hive.cljs")
 
+(def addon-key
+  "Ownership key for contributions, so retraction removes only ours."
+  :hive-cljs)
+
+(def host-tool
+  "Composite host tool this addon extends."
+  "code")
+
 (defrecord CljsAddon [config-ref]
   proto/IAddon
   (addon-id [_] addon-id)
@@ -20,20 +29,25 @@
 
   (initialize! [_ config]
     (reset! config-ref (or (:addon/config config) {}))
-    {:success? true
-     :errors   []
-     :metadata {:tools (mapv :name registry/tools)
-                :browser-adapter (if (browser/available?) :present :absent)}})
+    (let [contributed? (host/contribute-commands! host-tool addon-key
+                                                  registry/code-contributions)]
+      {:success? true
+       :errors   []
+       :metadata {:subdomain (str host-tool " " registry/subdomain)
+                  :contributed? contributed?
+                  :browser-adapter (if (browser/available?) :present :absent)}}))
 
   (shutdown! [_]
+    (host/retract-commands! host-tool addon-key)
     (doseq [root (h/running-watchers)]
       (h/close {:directory root}))
     (system/close-all!)
     nil)
 
-  (tools [_] registry/tools)
+  ;; No standalone root: the surface is the `code cljs …` subdomain.
+  (tools [_] [])
 
-  (schema-extensions [_] [])
+  (schema-extensions [_] {host-tool (registry/code-schema-ext)})
 
   (health [_]
     {:status :ok

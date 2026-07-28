@@ -1,0 +1,6 @@
+{:project-id  "hive-cljs"
+ :parent      "hive"
+ :description "ClojureScript development surface as a hive IAddon: shadow-cljs build status via the remote relay, cljs-eval in the running runtime, Playwright e2e scenarios, and build->e2e watching. Contributes the `cljs` subdomain to the consolidated code tool; driven by a project-root hive-cljs.edn manifest."
+ :type        :library
+ :kg-backend  :datahike
+ :carto       {:source-roots ["src" "test" "resources"]}}

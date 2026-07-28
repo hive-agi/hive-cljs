@@ -5,7 +5,7 @@
  :addon/init-ns      "hive-cljs.addon"
  :addon/init-fn      "addon-ctor"
  :addon/config       {}
- :addon/capabilities #{:tools}
+ :addon/capabilities #{:tools :schema :health-reporting}
  :addon/dependencies #{}
- :addon/description  "ClojureScript development surface: shadow-cljs build status, cljs-eval, Playwright e2e scenarios, and build→e2e watching, driven by a project hive-cljs.edn manifest"
+ :addon/description  "ClojureScript development — shadow-cljs build status, cljs-eval, Playwright e2e scenarios and build→e2e watching (code-tool `cljs` subdomain), driven by a project hive-cljs.edn manifest"
  :addon/license      "MIT"}

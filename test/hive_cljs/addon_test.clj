@@ -18,16 +18,63 @@
     (is (proto/valid-addon-type? (proto/addon-type a)))
     (is (contains? (proto/capabilities a) :tools))
     (is (= #{} (proto/excluded-tools a)))
-    (is (= {} (proto/hooks a)))
-    (is (= [] (proto/schema-extensions a)))))
+    (is (= {} (proto/hooks a)))))
 
-(deftest initialize-is-idempotent-and-reports-tools
+(deftest initialize-is-idempotent
   (let [a (addon/addon-ctor {})
         r1 (proto/initialize! a {:addon/config {}})
         r2 (proto/initialize! a {:addon/config {}})]
     (is (:success? r1))
     (is (:success? r2))
-    (is (= ["cljs"] (get-in r1 [:metadata :tools])))))
+    (is (= "code cljs" (get-in r1 [:metadata :subdomain])))))
+
+;; =============================================================================
+;; `code cljs …` subdomain
+;; =============================================================================
+
+(deftest contributes-a-subdomain-not-a-standalone-root
+  (let [a (addon/addon-ctor {})]
+    (testing "no root tool is advertised — the surface is the code subdomain"
+      (is (= [] (proto/tools a))))
+    (testing "exactly one command is contributed, keyed by the subdomain name"
+      (is (= ["cljs"] (vec (keys registry/code-contributions))))
+      (is (fn? (get-in registry/code-contributions ["cljs" :handler])))
+      (is (string? (get-in registry/code-contributions ["cljs" :description]))))))
+
+(deftest schema-extension-targets-the-code-tool-without-clobbering-its-params
+  (let [a   (addon/addon-ctor {})
+        ext (proto/schema-extensions a)]
+    (is (= ["code"] (vec (keys ext))))
+    (testing "novel params are contributed"
+      (is (contains? (get ext "code") "build"))
+      (is (contains? (get ext "code") "scenario"))
+      (is (contains? (get ext "code") "tags")))
+    (testing "params the code tool already owns are NOT re-contributed"
+      (doseq [owned ["command" "code" "path" "file" "namespace" "directory" "line"]]
+        (is (not (contains? (get ext "code") owned)) owned)))))
+
+(deftest subdomain-prefix-is-stripped-before-dispatch
+  (is (= "status" (registry/strip-subdomain-prefix "cljs status")))
+  (is (= "e2e run" (registry/strip-subdomain-prefix "cljs e2e run")))
+  (is (= "watch start" (registry/strip-subdomain-prefix "cljs watch start")))
+  (is (= "help" (registry/strip-subdomain-prefix "cljs help")))
+  (testing "an already-bare command passes through"
+    (is (= "status" (registry/strip-subdomain-prefix "status"))))
+  (testing "a command merely starting with the letters cljs is not truncated"
+    (is (= "cljsomething" (registry/strip-subdomain-prefix "cljsomething")))))
+
+(deftest subdomain-dispatch-routes-like-the-bare-tool
+  (testing "code cljs help reaches help"
+    (let [res (registry/dispatch-subdomain {:command "cljs help"})]
+      (is (r/ok? res))
+      (is (= (count registry/subcommands) (count (get-in res [:ok :subcommands]))))))
+  (testing "code cljs <unknown> is a typed error"
+    (is (= :cljs/unknown-command
+           (:error (registry/dispatch-subdomain {:command "cljs frobnicate"})))))
+  (testing "a multi-word subcommand survives the strip"
+    (is (= :manifest/not-found
+           (:error (registry/dispatch-subdomain {:command "cljs e2e list"
+                                                 :directory "/tmp/hive-cljs-absent"}))))))
 
 (deftest health-reports-without-any-project
   (let [a (addon/addon-ctor {})]
