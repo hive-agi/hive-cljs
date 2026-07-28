@@ -8,8 +8,11 @@ consolidated `code` tool — `code cljs status`, `code cljs e2e run`, and so on.
 One line in the coordinator's untracked `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs #:local{:root "../hive-cljs"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.1.1"}
 ```
+
+Published to Clojars, so nothing needs to be checked out. When hacking on
+hive-cljs itself, swap in `#:local{:root "../hive-cljs"}` instead.
 
 Restart. That is the whole host-side change.
 
