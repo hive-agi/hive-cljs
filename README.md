@@ -1,51 +1,78 @@
 # hive-cljs
 
-ClojureScript development as a hive IAddon: **shadow-cljs build status, cljs-eval, Playwright
-e2e scenarios and build→e2e watching**, driven by one EDN manifest in your project root.
+ClojureScript development as a hive IAddon: **shadow-cljs build status, cljs-eval,
+Playwright e2e scenarios and build→e2e watching**, driven by config in your
+project root.
 
-One tool, `cljs`, with subcommands. One addon, `hive.cljs`. Three ports.
+One addon. One `cljs` subdomain on the `code` tool. Three ports.
+
+## Documentation
+
+| | |
+|---|---|
+| **[Setting up a fresh project](docs/setup.md)** | nothing → a green scenario, with the traps that cost real time |
+| **[Configuration reference](docs/configuration.md)** | `.hive-project.edn` vs `hive-cljs.edn`, every key, every default |
+| **[Step reference](docs/steps.md)** | the browser + runtime vocabulary, semantics, adding a kind |
+| **[Mounting in a host](docs/hosting.md)** | wiring into hive-mcp, why a subdomain, diagnosing a silent mount |
+| **[Architecture](docs/architecture.md)** | CPPB layers, the ports, extension points |
 
 ## Why not just a build-status tool
 
-A scenario asserts on the **DOM and the live re-frame runtime in the same step vector**:
+A scenario asserts on the **DOM and the live re-frame runtime in the same step
+vector**:
 
 ```clojure
-[[:goto "/login"]
+[[:goto "/"]
  [:click "#go"]
- [:expect-text "#hi" "Hello, pedro"]      ; browser channel  → IBrowserDriver
- [:expect-sub [:current-user] "some?"]    ; runtime channel  → ICljsEval
+ [:expect-text "#hi" "Hello, pedro"]      ; browser  → IBrowserDriver
+ [:expect-sub [:current-user] "some?"]    ; runtime  → ICljsEval
  [:expect-db  [:user] "some?"]]
 ```
 
-`:expect-sub` / `:expect-db` / `:dispatch` / `:eval-cljs` are evaluated **inside the running
-application** over shadow's nREPL. Everything else drives a real browser.
+`:expect-sub` / `:expect-db` / `:dispatch` / `:eval-cljs` are evaluated **inside
+the running application** over shadow's nREPL. Everything else drives a real
+browser.
 
-## Manifest — `hive-cljs.edn` at the project root
+That split is also a debugging instrument: `:expect-text` red while `:expect-sub`
+green localises a bug to rendering rather than state.
+
+## Quick start
+
+`shadow-cljs.edn` supplies the two ports:
 
 ```clojure
-{:hive.cljs/shadow {:host "localhost" :port 9630 :nrepl-port 7889}
-
- :hive.cljs/builds {:app {:shadow/id :app :http-port 8280}}
-
- :hive.cljs/e2e    {:base-url  "http://localhost:8280"   ; inferred from :http-port if omitted
-                    :browser   :chromium
-                    :headless  true
-                    :scenarios [{:id    :login
-                                 :build :app             ; inherited when the project has one build
-                                 :tags  #{:smoke}
-                                 :steps [[:goto "/"]
-                                         [:click "#go"]
-                                         [:expect-sub [:current-user] "some?"]]}]}
-
- :hive.cljs/watch  {:on-build-success [[:run-e2e {:tags #{:smoke}}]]
-                    :debounce-ms      300}}
+{:deps true
+ :nrepl {:port 7889}          ; runtime channel
+ :dev-http {8280 "public"}    ; what the browser opens
+ :builds {:app {:target :browser ...}}}
 ```
+
+Config — in your existing `.hive-project.edn`:
+
+```clojure
+{:project-id "my-app"
+ :hive.cljs  {:shadow {:nrepl-port 7889}
+              :builds {:app {:http-port 8280}}}}
+```
+
+…or in a standalone `hive-cljs.edn`. Both work; both together merge, with the
+dedicated file winning. A single build id is the only required key.
+
+Then, with `shadow-cljs watch app` running:
+
+```clojure
+code {command: "cljs doctor",  directory: "/path/to/my-app"}
+code {command: "cljs e2e run", directory: "/path/to/my-app", scenario: "login"}
+code {command: "cljs watch start", directory: "/path/to/my-app"}
+```
+
+Full walkthrough: **[docs/setup.md](docs/setup.md)**.
 
 ## Tool surface
 
 | Subcommand | Does |
 |---|---|
-| `cljs doctor` | validate the manifest, report per-port connectivity |
+| `cljs doctor` | validate config, report per-port connectivity |
 | `cljs status [build]` | build verdict — one build or all |
 | `cljs compile <build>` | one compile cycle, returns the verdict |
 | `cljs eval <build> <code>` | evaluate cljs in the running runtime |
@@ -55,54 +82,43 @@ application** over shadow's nREPL. Everything else drives a real browser.
 
 All accept `directory` (project root; defaults to cwd).
 
-## Step kinds
-
-**Browser** — `:goto :back :reload :click :fill :select :check :press :hover :wait-for :wait-ms
-:expect-text :expect-value :expect-visible :expect-hidden :expect-count :expect-url :screenshot`
-
-**Runtime** — `:eval-cljs :dispatch :expect-sub :expect-db`
-
-A new kind is a new `IStepRule` appended to the rule vector — no edit to existing code.
-
 ## In a test suite
 
 ```clojure
 (require '[hive-cljs.test-api :as cljs-e2e])
 
 (deftest login-works
-  (is (cljs-e2e/passed? (cljs-e2e/run-scenario! project-root :login))))
-
-(deftest ad-hoc-steps
-  (let [res (cljs-e2e/run-steps! project-root :probe
-                                 [[:goto "/"] [:click "#go"] [:expect-sub [:current-user] "some?"]])]
+  (let [res (cljs-e2e/run-scenario! project-root :login)]
     (is (cljs-e2e/passed? res) (cljs-e2e/explain res))))
 ```
 
-## Architecture
+Same execution path as the tool and the watcher. See
+[setup.md](docs/setup.md#7-in-a-test-suite).
 
+## Installing
+
+One line in the host's `local.deps.edn`:
+
+```clojure
+io.github.hive-agi/hive-cljs #:local{:root "../hive-cljs"}
 ```
-BOUNDARY   addon/handlers · watch/supervisor · boundary   ← ports injected as arguments
-PIPELINE   plan (scenario→run-plan)   watch (event→decisions)
-PROMOTE    verdict (payload→verdict)  step (datum→op, OCP rule-chain)
-COLLECT    manifest (raw EDN→normalized)
-TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
-ADAPTERS   shadow/relay → IBuildTool    shadow/nrepl → ICljsEval    browser/playwright → IBrowserDriver
-```
-
-The vendor is named only in the adapters. Playwright sits behind an optional `:browser` alias —
-the library loads, tests and reports health with no browser present.
-
-## Running the tests
-
-```bash
-clojure -M:test -e "(require 'hive-cljs.boundary-test) ..."   # stubs only, no vendors needed
-clojure -M:browser -e "..."                                    # adds playwright-java
-```
+Batteries included — the relay transport, nREPL client and browser driver all
+ride in on hive-cljs's own `:deps`. The host declares nothing about our vendors.
+Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 
 ## Requirements
 
-- shadow-cljs server running (`shadow-cljs watch <build>`) for build status and e2e
-- `:nrepl-port` in the manifest for the runtime channel; a browser must have loaded the app so a
-  JS runtime is connected
-- the `:browser` alias for anything that drives a page
+- a running shadow-cljs server (`shadow-cljs watch <build>`) for build status and e2e
+- `:nrepl-port` in the config for the runtime channel, plus a browser with the app
+  open so a JS runtime is connected — a scenario's `:goto` handles that itself
+
+## Testing
+
+```bash
+clojure -M:test    # 77 tests, 316 assertions — stubs only, no vendors needed
+```
+
+## License
+
+MIT.

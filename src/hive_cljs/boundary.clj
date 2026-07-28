@@ -26,19 +26,41 @@
   [root]
   (str (str/replace (str root) #"/$" "") "/" manifest/manifest-filename))
 
-(defn load-manifest
-  "Read and validate `hive-cljs.edn` under `root`. Returns a Result of a
-   normalized manifest."
+(defn project-path
+  "Path to the project descriptor that may carry `:hive.cljs` config."
   [root]
-  (let [f (io/file (manifest-path root))]
-    (if-not (.exists f)
-      (r/err :manifest/not-found {:path (manifest-path root)})
-      (try
-        (with-open [rdr (PushbackReader. (io/reader f))]
-          (manifest/parse (edn/read rdr) (str root)))
-        (catch Exception e
-          (r/err :manifest/unreadable {:path (manifest-path root)
-                                       :cause (.getMessage e)}))))))
+  (str (str/replace (str root) #"/$" "") "/" manifest/project-filename))
+
+(defn- read-edn-file
+  [f]
+  (with-open [rdr (PushbackReader. (io/reader f))]
+    (edn/read rdr)))
+
+(defn load-manifest
+  "Read hive-cljs config for `root` and return a Result of a normalized manifest.
+
+   Two sources, either or both:
+   - `.hive-project.edn` — a `:hive.cljs` submap, or flat `:hive.cljs/*` keys
+   - `hive-cljs.edn`     — the dedicated file, which WINS on collision
+
+   Sections merge one level deep, so a project may keep connectivity in the
+   descriptor and scenarios in the dedicated file."
+  [root]
+  (let [pf (io/file (project-path root))
+        mf (io/file (manifest-path root))]
+    (try
+      (let [from-project (when (.exists pf) (manifest/project-config (read-edn-file pf)))
+            from-file    (when (.exists mf) (read-edn-file mf))
+            sources      (cond-> []
+                           (seq from-project) (conj (project-path root))
+                           (some? from-file)  (conj (manifest-path root)))]
+        (if (empty? sources)
+          (r/err :manifest/not-found {:searched [(project-path root) (manifest-path root)]})
+          (manifest/parse (manifest/merge-config from-project from-file)
+                          (str root)
+                          sources)))
+      (catch Exception e
+        (r/err :manifest/unreadable {:root (str root) :cause (.getMessage e)})))))
 
 ;; =============================================================================
 ;; Runtime-channel execution

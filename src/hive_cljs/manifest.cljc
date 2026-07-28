@@ -16,6 +16,33 @@
 
 (def manifest-filename "hive-cljs.edn")
 
+(def project-filename ".hive-project.edn")
+
+(defn project-config
+  "Extract hive-cljs config from a `.hive-project.edn` map.
+
+   Accepts both spellings: a nested `:hive.cljs` submap with short keys, and
+   flat `:hive.cljs/*` keys. Flat wins on collision. Returns {} when neither is
+   present."
+  [project-edn]
+  (if-not (map? project-edn)
+    {}
+    (let [flat   (into {} (filter (fn [[k _]] (and (keyword? k)
+                                                   (= "hive.cljs" (namespace k)))))
+                       project-edn)
+          nested (into {} (map (fn [[k v]] [(keyword "hive.cljs" (name k)) v]))
+                       (let [n (:hive.cljs project-edn)] (when (map? n) n)))]
+      (merge nested flat))))
+
+(defn merge-config
+  "Merge raw config maps left-to-right; later wins. Top-level sections are
+   merged one level deep, so a base section may be split across sources."
+  [& configs]
+  (or (apply merge-with
+             (fn [a b] (if (and (map? a) (map? b)) (merge a b) b))
+             (remove nil? configs))
+      {}))
+
 (def default-shadow  {:host "localhost" :port 9630})
 (def default-e2e     {:browser :chromium :headless true :timeout-ms 15000})
 (def default-watch   {:on-build-success [] :on-build-failure [] :debounce-ms 500})
@@ -113,11 +140,14 @@
            {:explain (me/humanize (m/explain s/Manifest manifest))})))
 
 (defn parse
-  "Raw EDN + root → Result of a validated normalized manifest."
-  [raw root]
-  (if-not (map? raw)
-    (r/err :manifest/not-a-map {:got (type raw)})
-    (validate (normalize raw root))))
+  "Raw config + root → Result of a validated normalized manifest.
+   `sources` records which files the config came from."
+  ([raw root] (parse raw root nil))
+  ([raw root sources]
+   (if-not (map? raw)
+     (r/err :manifest/not-a-map {:got (type raw)})
+     (validate (cond-> (normalize raw root)
+                 (seq sources) (assoc :manifest/sources (vec sources)))))))
 
 ;; =============================================================================
 ;; Queries

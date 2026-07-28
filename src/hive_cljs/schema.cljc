@@ -139,9 +139,10 @@
    [:builds {:optional true} [:set BuildId]]])
 
 (def Manifest
-  "Normalized `hive-cljs.edn` — every default resolved."
+  "Normalized project config — every default resolved."
   [:map {:closed true}
    [:manifest/root NonBlankString]
+   [:manifest/sources {:optional true} [:vector NonBlankString]]
    [:manifest/shadow ShadowConfig]
    [:manifest/builds [:map-of BuildId BuildSpec]]
    [:manifest/e2e E2eConfig]

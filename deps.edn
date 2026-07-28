@@ -31,13 +31,19 @@
   ;; cljs-eval channel
   nrepl/nrepl                   {:mvn/version "1.7.0"}
 
-  com.taoensso/timbre           {:mvn/version "6.8.0"}}
+  com.taoensso/timbre           {:mvn/version "6.8.0"}
+
+  ;; Browser adapter. A base dep, not an alias: an IAddon must be
+  ;; batteries-included, because tools.deps aliases do NOT propagate to a host
+  ;; that mounts this lib — the host would otherwise have to declare our vendor.
+  ;; ~195M in ~/.m2 (driver-bundle ships node + the driver); nothing is
+  ;; extracted or launched until a scenario opens a session.
+  com.microsoft.playwright/playwright {:mvn/version "1.55.0"}}
 
  :aliases
- {;; Browser adapter deps are OPTIONAL — the lib loads and the pure spine tests
-  ;; run with zero vendors present.
-  :browser
-  {:extra-deps {com.microsoft.playwright/playwright {:mvn/version "1.55.0"}}}
+ {;; Retained so `-M:browser` keeps working for anyone who scripted it.
+  ;; The coord now lives in :deps; this adds nothing.
+  :browser {}
 
   :test
   {:extra-paths ["test"]
