@@ -4,7 +4,8 @@ From nothing to a green end-to-end scenario. Assumes hive-cljs is already mounte
 in your hive-mcp coordinator — if it isn't, see [hosting.md](hosting.md).
 
 Everything below was executed while building this library; the numbers and error
-strings are real.
+strings are real. If you would rather start from something that already runs,
+[`example/`](../example/) is this walkthrough's end state, committed.
 
 ## 1. A minimal shadow-cljs project
 

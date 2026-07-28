@@ -1,0 +1,11 @@
+{:project-id "hive-cljs-example"
+ :parent "hive-cljs"
+ :type :application
+ :carto {:source-roots ["src"]}
+
+ ;; Connectivity here; scenarios in ./hive-cljs.edn. Both are read and merged
+ ;; one level deep, hive-cljs.edn winning key by key: it overrides :port to
+ ;; 9633 while :host and :nrepl-port survive from this map.
+ :hive.cljs {:shadow {:host "localhost" :port 9630 :nrepl-port 7889}
+             :builds {:app {:shadow/id :app :http-port 8280}
+                      :ci  {:shadow/id :ci}}}}

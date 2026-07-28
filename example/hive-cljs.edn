@@ -1,0 +1,30 @@
+;; :port overrides the descriptor's 9630 — shadow takes the next free port with
+;; only a warning, so check the startup banner and set what it ACTUALLY bound.
+{:hive.cljs/shadow {:port 9631}
+ :hive.cljs/e2e
+ {:base-url "http://localhost:8280"
+  :browser :chromium
+  :headless true
+  :scenarios
+  [{:id :login :build :app :tags [:smoke]
+    :steps [[:goto "/"]
+            [:wait-for "#go"]
+            [:expect-hidden "#hi"]
+            [:click "#go"]
+            [:expect-text "#hi" "Hello, pedro"]
+            [:expect-sub [:current-user] "#(= % \"pedro\")"]
+            [:expect-db [:user] "#(= % \"pedro\")"]
+            [:screenshot "logged-in"]]}
+   {:id :inputs :build :app :tags [:inputs]
+    :steps [[:goto "/"]
+            [:wait-for "#name"]
+            [:fill "#name" "ada"]
+            [:expect-value "#name" "ada"]
+            [:select "#country" "BR"]
+            [:expect-value "#country" "BR"]
+            [:check "#agree"]
+            [:hover "#go"]
+            [:press "#name" "Enter"]
+            [:expect-text "#echo" "ada"]]}]}
+ :hive.cljs/watch {:on-build-success [[:run-e2e {:tags [:smoke]}]]
+                   :debounce-ms 300}}

@@ -67,6 +67,30 @@
   [status]
   (= :completed (:build/state status)))
 
+(def terminal-states
+  "Build states at which a compile cycle has finished, successfully or not."
+  #{:completed :failed})
+
+(defn terminal-state?
+  "True when `state` is one a compile cycle settles at."
+  [state]
+  (contains? terminal-states state))
+
+(defn settled?
+  "True when `status` reports a finished compile cycle."
+  [status]
+  (terminal-state? (:build/state status)))
+
+(defn compile-settled?
+  "True when `status` settles a compile cycle that is newer than `prev-raw`.
+
+   `progressed?` records whether the build was already observed in a
+   non-terminal state since the compile was requested. Without one of those two
+   witnesses a settled status may be the one that predated the request."
+  [status raw prev-raw progressed?]
+  (and (or (boolean progressed?) (not= raw prev-raw))
+       (settled? status)))
+
 ;; =============================================================================
 ;; Run report
 ;; =============================================================================
@@ -124,6 +148,10 @@
 (m/=> compiled-files [:=> [:cat [:maybe [:sequential :any]]] [:vector s/CompiledFile]])
 (m/=> unknown-status [:=> [:cat s/BuildId] s/BuildStatus])
 (m/=> build-ok? [:=> [:cat s/BuildStatus] :boolean])
+(m/=> terminal-state? [:=> [:cat s/BuildState] :boolean])
+(m/=> settled? [:=> [:cat s/BuildStatus] :boolean])
+(m/=> compile-settled?
+      [:=> [:cat s/BuildStatus [:maybe :any] [:maybe :any] [:maybe :boolean]] :boolean])
 (m/=> step-result [:=> [:cat [:int {:min 0}] s/Op [:maybe [:map-of :keyword :any]]] s/StepResult])
 (m/=> run-state [:=> [:cat [:vector s/StepResult]] s/RunState])
 (m/=> run-ok? [:=> [:cat s/RunReport] :boolean])

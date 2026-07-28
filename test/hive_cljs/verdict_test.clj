@@ -73,3 +73,41 @@
     (is (m/validate s/BuildStatus st))
     (is (= :unknown (:build/state st)))
     (is (not (verdict/build-ok? st)))))
+
+(deftest a-compile-settles-only-on-a-cycle-newer-than-the-one-it-found
+  (let [done    (verdict/build-status P :app {:status :completed :compiled "1"})
+        failed  (verdict/build-status P :app {:status :failed})
+        going   (verdict/build-status P :app {:status :compiling})
+        unknown (verdict/unknown-status :app)
+        raw-a   {:status :completed :duration-ms 100}
+        raw-b   {:status :completed :duration-ms 250}]
+    (testing "terminal states are exactly the settled ones"
+      (is (verdict/terminal-state? :completed))
+      (is (verdict/terminal-state? :failed))
+      (is (not (verdict/terminal-state? :compiling)))
+      (is (not (verdict/terminal-state? :pending)))
+      (is (not (verdict/terminal-state? :unknown)))
+      (is (verdict/settled? done))
+      (is (verdict/settled? failed))
+      (is (not (verdict/settled? going)))
+      (is (not (verdict/settled? unknown))))
+
+    (testing "a settled status identical to the pre-request one is NOT this cycle"
+      (is (not (verdict/compile-settled? done raw-a raw-a false))))
+
+    (testing "a changed payload is a witness on its own"
+      (is (verdict/compile-settled? done raw-b raw-a false)))
+
+    (testing "having passed through a non-terminal state is the other witness"
+      (is (verdict/compile-settled? done raw-a raw-a true)))
+
+    (testing "a witness alone does not settle an unfinished build"
+      (is (not (verdict/compile-settled? going raw-b raw-a true)))
+      (is (not (verdict/compile-settled? unknown nil nil true))))
+
+    (testing "a failed compile settles too — it is an answer, not a wait"
+      (is (verdict/compile-settled? failed raw-b raw-a false)))
+
+    (testing "a build never seen before settles on its first terminal status"
+      (is (not (verdict/compile-settled? unknown nil nil false)))
+      (is (verdict/compile-settled? done raw-a nil false)))))

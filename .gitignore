@@ -4,3 +4,10 @@ target/
 .lsp/.cache/
 local.deps.edn
 .hive-cljs/
+
+# example/ build + install artifacts
+example/node_modules/
+example/package-lock.json
+example/public/js/
+example/.shadow-cljs/
+example/shadow.log

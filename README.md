@@ -15,6 +15,7 @@ One addon. One `cljs` subdomain on the `code` tool. Three ports.
 | **[Step reference](docs/steps.md)** | the browser + runtime vocabulary, semantics, adding a kind |
 | **[Mounting in a host](docs/hosting.md)** | wiring into hive-mcp, why a subdomain, diagnosing a silent mount |
 | **[Architecture](docs/architecture.md)** | CPPB layers, the ports, extension points |
+| **[Runnable example](example/)** | a wired shadow-cljs + re-frame app you can `cljs e2e run` against |
 
 ## Why not just a build-status tool
 
@@ -66,7 +67,9 @@ code {command: "cljs e2e run", directory: "/path/to/my-app", scenario: "login"}
 code {command: "cljs watch start", directory: "/path/to/my-app"}
 ```
 
-Full walkthrough: **[docs/setup.md](docs/setup.md)**.
+Full walkthrough: **[docs/setup.md](docs/setup.md)**. Working code to copy from:
+**[example/](example/)** — both config sources, both assertion channels, the
+input vocabulary and the watcher, in one small app.
 
 ## Tool surface
 
@@ -116,7 +119,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 77 tests, 316 assertions — stubs only, no vendors needed
+clojure -M:test    # 92 tests, 377 assertions — stubs only, no vendors needed
 ```
 
 ## License

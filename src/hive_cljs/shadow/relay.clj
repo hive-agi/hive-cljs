@@ -124,6 +124,38 @@
 
       :else nil)))
 
+(defn- status-of
+  [state-ref prof build-id]
+  (if-let [raw (sync-db/raw-status (:db @state-ref) prof build-id)]
+    (verdict/build-status prof build-id raw)
+    (verdict/unknown-status build-id)))
+
+(defn- await-compile!
+  "Block until `build-id` settles on a compile cycle newer than `prev-raw`.
+
+   Returns a Result of the settled `schema/BuildStatus`, or
+   `:relay/compile-timeout` when `:relay/compile-timeout-ms` elapses first."
+  [state-ref prof build-id prev-raw]
+  (let [timeout-ms (:relay/compile-timeout-ms prof)
+        poll-ms    (:relay/poll-ms prof)
+        deadline   (+ (System/currentTimeMillis) timeout-ms)]
+    (loop [progressed? false]
+      (let [raw    (sync-db/raw-status (:db @state-ref) prof build-id)
+            status (status-of state-ref prof build-id)]
+        (cond
+          (verdict/compile-settled? status raw prev-raw progressed?)
+          (r/ok status)
+
+          (> (System/currentTimeMillis) deadline)
+          (r/err :relay/compile-timeout {:build build-id
+                                         :timeout-ms timeout-ms
+                                         :last-state (:build/state status)})
+
+          :else
+          (do (Thread/sleep ^long poll-ms)
+              (recur (or progressed?
+                         (not (verdict/terminal-state? (:build/state status)))))))))))
+
 ;; =============================================================================
 ;; Adapter
 ;; =============================================================================
@@ -134,20 +166,18 @@
     (r/ok (sync-db/build-ids (:db @state-ref))))
 
   (build-status [_ build-id]
-    (let [db (:db @state-ref)]
-      (r/ok (if-let [raw (sync-db/raw-status db prof build-id)]
-              (verdict/build-status prof build-id raw)
-              (verdict/unknown-status build-id)))))
+    (r/ok (status-of state-ref prof build-id)))
 
-  (compile-once! [this build-id]
-    (let [op (if (sync-db/worker-active? (:db @state-ref) prof build-id)
-               (:relay/watch-compile-op prof)
-               (:relay/compile-op prof))
-          sent (send! state-ref
-                      (server-msg prof op {(:relay/build-id-arg prof) build-id}))]
+  (compile-once! [_ build-id]
+    (let [op       (if (sync-db/worker-active? (:db @state-ref) prof build-id)
+                     (:relay/watch-compile-op prof)
+                     (:relay/compile-op prof))
+          prev-raw (sync-db/raw-status (:db @state-ref) prof build-id)
+          sent     (send! state-ref
+                          (server-msg prof op {(:relay/build-id-arg prof) build-id}))]
       (if (r/err? sent)
         sent
-        (ports/build-status this build-id))))
+        (await-compile! state-ref prof build-id prev-raw))))
 
   (subscribe! [_ k f]
     (swap! state-ref assoc-in [:subs k] f)

@@ -45,7 +45,9 @@
    [:relay/build-id-arg :keyword]
    [:relay/server-runtime-id :int]
    [:relay/status-map [:map-of :keyword s/BuildState]]
-   [:relay/reconnect-ms s/Millis]])
+   [:relay/reconnect-ms s/Millis]
+   [:relay/compile-timeout-ms s/Millis]
+   [:relay/poll-ms s/Millis]])
 
 (def BrowserProfile
   [:map {:closed true}
@@ -96,7 +98,9 @@
                              :failed           :failed
                              :configure        :pending
                              :compile-warnings :completed}
-   :relay/reconnect-ms      2000})
+   :relay/reconnect-ms      2000
+   :relay/compile-timeout-ms 120000
+   :relay/poll-ms           50})
 
 (def browser-default
   {:profile/id             :browser/default

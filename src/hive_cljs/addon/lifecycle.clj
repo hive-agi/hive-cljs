@@ -25,7 +25,7 @@
   proto/IAddon
   (addon-id [_] addon-id)
   (addon-type [_] :native)
-  (capabilities [_] #{:tools :health-reporting})
+  (capabilities [_] #{:tools :schema :health-reporting})
 
   (initialize! [_ config]
     (reset! config-ref (or (:addon/config config) {}))
