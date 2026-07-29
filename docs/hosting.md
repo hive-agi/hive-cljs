@@ -8,7 +8,7 @@ consolidated `code` tool — `code cljs status`, `code cljs e2e run`, and so on.
 One line in the coordinator's untracked `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.1.1"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.1.3"}
 ```
 
 Published to Clojars, so nothing needs to be checked out. When hacking on
