@@ -36,9 +36,10 @@
    :out s/RunState
    :rel (fn [in out]
           (let [states (set (map :step/state in))]
-            (= out (cond (contains? states :error) :error
-                         (contains? states :fail)  :fail
-                         :else                     :pass))))
+            (= out (cond (contains? states :error)      :error
+                         (contains? states :fail)       :fail
+                         (contains? states :incomplete) :incomplete
+                         :else                          :pass))))
    :mutation false
    :num-tests 200})
 

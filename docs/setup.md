@@ -135,7 +135,7 @@ code {command: "cljs e2e run", directory: "/abs/path/to/my-app", scenario: "logi
 ```
 
 ```
-login: pass (8 pass, 0 fail, 0 error, 0 skipped)
+login: pass (8 pass, 0 fail, 0 error, 0 incomplete, 0 skipped)
 ```
 
 `:expect-sub` is the part a DOM-only tool cannot do: it evaluates
@@ -146,6 +146,18 @@ The runtime channel needs a page open, because that is what connects a JS runtim
 to shadow. `No available JS runtime` from `cljs eval` means no browser has loaded
 the app — not a misconfiguration. A scenario avoids this by construction: its
 `:goto` opens the page before any runtime step runs.
+
+Inside a scenario the runtime channel is pinned to that page specifically, so
+other tabs you have open cannot answer its assertions. Ad-hoc `cljs eval` has no
+such page to pin to and still goes to whichever runtime shadow picks — worth
+remembering when a manual eval and a scenario disagree.
+
+A run reporting `:incomplete` means assertions could not be attempted at all — no
+runtime connected, or the driven page could not be identified. That is neither a
+failure of the app nor a pass: nothing was proven. If the shadow nREPL was
+restarted or OOM-killed, hive-cljs may be holding a dead connection; `cljs close`
+re-probes it, and `cljs doctor` should show `:cljs-eval :ok` before you trust a
+green run.
 
 ## 6. Let it run itself
 

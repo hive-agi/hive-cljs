@@ -59,8 +59,10 @@ user sees, `:expect-sub` proves what the app believes.
 
 ## Runtime steps
 
-Evaluated inside the running application. All require `:nrepl-port` in the config
-and a build id (explicit `:build`, or inherited when the project has one build).
+Evaluated inside the running application — in the page the scenario itself drives,
+not merely in some runtime attached to the build. All require `:nrepl-port` in the
+config and a build id (explicit `:build`, or inherited when the project has one
+build).
 
 | Step | Evaluates |
 |---|---|
@@ -81,13 +83,34 @@ evaluation errors.
 **Failure halts the run.** The first `:fail` or `:error` stops execution; every
 later step is reported `:skipped`. The browser session is still closed.
 
-**A missing runtime is a skip, not a failure.** Without `:nrepl-port`, runtime
-steps report `:skipped` with the reason, and a browser-only scenario still passes.
-A missing *browser* when the plan needs one is a hard `:run/no-driver` error.
+**A step that could not be attempted is `:incomplete` — never a pass.** Without a
+connected runtime channel, `:expect-sub` / `:expect-db` report `:incomplete` and
+the run's state becomes `:incomplete`. The run still produces a report rather
+than exploding, and browser steps still report their own results — but the run is
+not green, because assertions that never executed prove nothing. A browser-only
+scenario is unaffected. A missing *browser* when the plan needs one is a hard
+`:run/no-driver` error.
 
 **Step states**: `:pass`, `:fail` (assertion did not hold), `:error` (the step
-threw or the channel failed), `:skipped`. The run's state is its worst step —
-`:error` > `:fail` > `:pass`; `:skipped` alone does not fail a run.
+threw or the channel failed), `:incomplete` (the step could not be attempted),
+`:skipped` (the verdict was already decided). The run's state is its worst step:
+
+```
+:error  >  :fail  >  :incomplete  >  :pass
+```
+
+`:skipped` never decides a run — it only ever follows a step that already did.
+`:incomplete` ranks below `:fail` because a real failure is the more actionable
+signal, and above `:pass` because an unexecuted assertion is not evidence.
+
+**State assertions read the browser the scenario drives.** When both channels
+support it, hive-cljs stamps the page it opened and pins runtime evaluation to
+that exact page. Without this, a second connected runtime — a stray tab, a
+forgotten headless browser, devcards, the shadow UI — answers the assertions
+instead, and the scenario silently grades the wrong page. Binding happens once
+per run, just before the first runtime step. If the page cannot be identified,
+runtime steps are `:incomplete`; no assertion is answered by a runtime that may
+not be yours.
 
 ## Malformed steps fail the plan, not the run
 

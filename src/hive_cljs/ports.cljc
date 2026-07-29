@@ -54,6 +54,14 @@
   (close-session! [this session]
     "Release the session. Returns a Result of nil. Idempotent."))
 
+(defprotocol IPageMarker
+  "Optional: stamp the driven page so another channel can recognise it."
+
+  (mark-session! [this session token]
+    "Stamp every document this session loads with `token`, readable from page
+     JS as `window.__hiveCljsToken`. Must survive navigation.
+     Returns a Result of token."))
+
 ;; =============================================================================
 ;; ICljsEval — the runtime channel
 ;; =============================================================================
@@ -68,6 +76,19 @@
   (runtime-available? [this build-id]
     "Return true when a runtime is connected for build-id."))
 
+(defprotocol IRuntimeAffinity
+  "Optional: pin evaluation to one specific connected runtime."
+
+  (bind-runtime! [this build-id token]
+    "Pin subsequent `eval-cljs` calls to the runtime whose page carries `token`
+     (as stamped by `IPageMarker/mark-session!`).
+     Returns a Result of the bound runtime's id, or an err when no connected
+     runtime carries the token.")
+
+  (unbind-runtime! [this]
+    "Drop any pin, returning to the toolchain's own runtime choice.
+     Returns a Result of nil. Idempotent."))
+
 ;; =============================================================================
 ;; Predicates
 ;; =============================================================================
@@ -75,3 +96,5 @@
 (defn build-tool? [x] (satisfies? IBuildTool x))
 (defn browser-driver? [x] (satisfies? IBrowserDriver x))
 (defn cljs-eval? [x] (satisfies? ICljsEval x))
+(defn page-marker? [x] (satisfies? IPageMarker x))
+(defn runtime-affinity? [x] (satisfies? IRuntimeAffinity x))

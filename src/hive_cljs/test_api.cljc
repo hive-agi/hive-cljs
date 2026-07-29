@@ -48,7 +48,7 @@
     (pr-str res)
     (let [rep (:ok res)]
       (str (verdict/summarize rep)
-           (when-let [bad (seq (filter #(contains? #{:fail :error} (:step/state %))
+           (when-let [bad (seq (filter #(contains? #{:fail :error :incomplete} (:step/state %))
                                        (:run/steps rep)))]
              (str " — " (pr-str (first bad))))))))
 

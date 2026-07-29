@@ -60,6 +60,25 @@
 
   (close-session! [_ _]
     (swap! state-ref update :closed inc)
+    (r/ok nil))
+
+  ports/IPageMarker
+  (mark-session! [_ _session token]
+    (swap! state-ref update :marks conj token)
+    (r/ok token)))
+
+(defrecord StubDriverNoMarker [state-ref outcome-fn]
+  ports/IBrowserDriver
+  (open-session! [_ opts]
+    (swap! state-ref update :sessions inc)
+    (r/ok {:stub-session (:sessions @state-ref) :opts opts}))
+
+  (perform! [_ session op]
+    (swap! state-ref update :ops conj op)
+    (r/ok (outcome-fn session op)))
+
+  (close-session! [_ _]
+    (swap! state-ref update :closed inc)
     (r/ok nil)))
 
 (defn always-pass [_ op] {:state :pass :detail (str (:op/kind op)) :elapsed-ms 1})
@@ -72,9 +91,16 @@
       {:state :fail :detail (str "stub failure on " kind) :elapsed-ms 1}
       {:state :pass :elapsed-ms 1})))
 
+(defn- driver-state [] (atom {:sessions 0 :ops [] :closed 0 :marks []}))
+
 (defn driver
   ([] (driver always-pass))
-  ([outcome-fn] (->StubDriver (atom {:sessions 0 :ops [] :closed 0}) outcome-fn)))
+  ([outcome-fn] (->StubDriver (driver-state) outcome-fn)))
+
+(defn driver-without-marking
+  "A driver that cannot stamp its page — exercises the degradation path."
+  ([] (driver-without-marking always-pass))
+  ([outcome-fn] (->StubDriverNoMarker (driver-state) outcome-fn)))
 
 (defn performed-ops [stub] (:ops @(:state-ref stub)))
 (defn sessions-opened [stub] (:sessions @(:state-ref stub)))
@@ -93,10 +119,48 @@
         v
         (r/ok {:value v :printed ""}))))
 
+  (runtime-available? [_ _] true)
+
+  ports/IRuntimeAffinity
+  (bind-runtime! [_ build-id token]
+    (swap! state-ref update :binds conj [build-id token])
+    (let [{:keys [accept-any-token? runtimes]} @state-ref]
+      (if-let [rt (if accept-any-token? 1 (get runtimes token))]
+        (do (swap! state-ref assoc :bound rt) (r/ok rt))
+        (r/err :cljs-eval/runtime-not-identified
+               {:build build-id :token token :connected (vec (vals runtimes))}))))
+
+  (unbind-runtime! [_]
+    (swap! state-ref dissoc :bound)
+    (r/ok nil)))
+
+(defrecord StubCljsEvalNoAffinity [state-ref value-fn]
+  ports/ICljsEval
+  (eval-cljs [_ build-id form-str]
+    (swap! state-ref update :evals conj [build-id form-str])
+    (let [v (value-fn build-id form-str)]
+      (if (and (map? v) (contains? v :error))
+        v
+        (r/ok {:value v :printed ""}))))
+
   (runtime-available? [_ _] true))
 
 (defn cljs-eval
+  "Affinity-capable eval stub. By default any stamp identifies a runtime;
+   pass {:accept-any-token? false :runtimes {token id}} to model a page the
+   runtime channel cannot recognise."
   ([] (cljs-eval (constantly true)))
-  ([value-fn] (->StubCljsEval (atom {:evals []}) value-fn)))
+  ([value-fn] (cljs-eval value-fn {:accept-any-token? true}))
+  ([value-fn opts]
+   (->StubCljsEval (atom (merge {:evals [] :binds []} opts)) value-fn)))
+
+(defn cljs-eval-without-affinity
+  "An eval stub that cannot pin a runtime — exercises the degradation path."
+  ([] (cljs-eval-without-affinity (constantly true)))
+  ([value-fn] (->StubCljsEvalNoAffinity (atom {:evals [] :binds []}) value-fn)))
+
+(defn binds [stub] (:binds @(:state-ref stub)))
+(defn bound-runtime [stub] (:bound @(:state-ref stub)))
+(defn marks [stub] (:marks @(:state-ref stub)))
 
 (defn evals [stub] (:evals @(:state-ref stub)))

@@ -110,13 +110,15 @@
    :step/state :skipped :step/detail reason})
 
 (defn run-state
-  "Worst state across step results decides the run."
+  "Worst state across step results decides the run.
+   Precedence: :error > :fail > :incomplete > :pass. `:skipped` never decides."
   [results]
   (let [states (set (map :step/state results))]
     (cond
-      (contains? states :error) :error
-      (contains? states :fail)  :fail
-      :else                     :pass)))
+      (contains? states :error)      :error
+      (contains? states :fail)       :fail
+      (contains? states :incomplete) :incomplete
+      :else                          :pass)))
 
 (defn report
   "Scenario id + step results → `schema/RunReport`."
@@ -139,7 +141,8 @@
         by    (frequencies (map :step/state steps))]
     (str (name (:run/scenario rep)) ": " (name (:run/state rep))
          " (" (get by :pass 0) " pass, " (get by :fail 0) " fail, "
-         (get by :error 0) " error, " (get by :skipped 0) " skipped)")))
+         (get by :error 0) " error, " (get by :incomplete 0) " incomplete, "
+         (get by :skipped 0) " skipped)")))
 
 ;; =============================================================================
 ;; Contracts

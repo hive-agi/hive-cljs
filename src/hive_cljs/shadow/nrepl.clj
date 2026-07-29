@@ -24,10 +24,22 @@
 
 (defn cljs-eval-form
   "Wrap a user form so it is evaluated in build-id's cljs runtime from a CLJ
-   nREPL session."
-  [build-id form-str]
-  (str "(shadow.cljs.devtools.api/cljs-eval " (pr-str (keyword (name build-id))) " "
-       (pr-str form-str) " {})"))
+   nREPL session. A non-nil runtime-id pins the eval to that runtime."
+  ([build-id form-str] (cljs-eval-form build-id form-str nil))
+  ([build-id form-str runtime-id]
+   (str "(shadow.cljs.devtools.api/cljs-eval " (pr-str (keyword (name build-id))) " "
+        (pr-str form-str) " "
+        (pr-str (if runtime-id {:runtime-id runtime-id} {})) ")")))
+
+(defn repl-runtimes-form
+  "Source text listing the runtimes connected to build-id."
+  [build-id]
+  (str "(mapv #(select-keys % [:client-id :user-agent :host])"
+       " (shadow.cljs.devtools.api/repl-runtimes " (pr-str (keyword (name build-id))) "))"))
+
+(def token-read-form
+  "Source text reading the page stamp `IPageMarker/mark-session!` writes."
+  "(.-__hiveCljsToken js/window)")
 
 (defn- collect
   "Fold nREPL response messages into {:value :printed :errors :status}."
@@ -47,43 +59,81 @@
   (let [msgs (nrepl/message client {:op "eval" :code form-str :timeout timeout-ms})]
     (collect (doall msgs))))
 
+(defn- eval-clj
+  "Evaluate a CLJ form on the shadow server session.
+   Returns a Result of {:value <edn> :printed str}."
+  [conn form-str timeout-ms]
+  (if-let [{:keys [client]} conn]
+    (try
+      (let [{:keys [values printed ex status]} (eval-in-session client form-str timeout-ms)]
+        (cond
+          ex                             (r/err :cljs-eval/threw {:ex ex :printed printed})
+          (contains? status :eval-error) (r/err :cljs-eval/eval-error {:printed printed})
+          (empty? values)                (r/err :cljs-eval/no-value {:printed printed})
+          :else                          (r/ok {:value (read-edn (last values))
+                                                :printed printed})))
+      (catch Exception e
+        (r/err :cljs-eval/transport-failed {:cause (.getMessage e)})))
+    (r/err :cljs-eval/not-connected {})))
+
+(defn- run-cljs
+  "Evaluate form-str in build-id's runtime, optionally pinned to runtime-id.
+   Returns a Result of {:value <edn> :printed str}."
+  [conn build-id form-str runtime-id timeout-ms]
+  (let [res (eval-clj conn (cljs-eval-form build-id form-str runtime-id) timeout-ms)]
+    (if (r/err? res)
+      res
+      (let [{:keys [value printed]} (:ok res)
+            results (when (map? value) (:results value))
+            v       (if (seq results) (read-edn (last results)) value)]
+        (if (and (map? value) (seq (:err value)))
+          (r/err :cljs-eval/runtime-error {:build build-id :detail (:err value)})
+          (r/ok {:value v :printed printed}))))))
+
+(defn- find-runtime
+  "Client-id of the connected runtime whose page carries `token`.
+   Returns a Result of that id. Probes each runtime at most once."
+  [conn build-id token timeout-ms]
+  (let [res (eval-clj conn (repl-runtimes-form build-id) timeout-ms)]
+    (if (r/err? res)
+      res
+      (let [runtimes (get-in res [:ok :value])
+            carries? (fn [{:keys [client-id]}]
+                       (let [probe (run-cljs conn build-id token-read-form client-id timeout-ms)]
+                         (and (r/ok? probe) (= token (get-in probe [:ok :value])))))]
+        (if-not (seq runtimes)
+          (r/err :cljs-eval/no-runtime
+                 {:build build-id
+                  :hint "no browser is connected to this build — load the app first"})
+          (if-let [hit (first (filter carries? runtimes))]
+            (r/ok (:client-id hit))
+            (r/err :cljs-eval/runtime-not-identified
+                   {:build build-id
+                    :connected (mapv #(select-keys % [:client-id :user-agent]) runtimes)
+                    :hint "no connected runtime carries the session stamp"})))))))
+
 (defrecord ShadowNrepl [conn-atom opts]
   ports/ICljsEval
   (eval-cljs [_ build-id form-str]
-    (if-let [{:keys [client]} @conn-atom]
-      (try
-        (let [{:keys [values printed ex status]}
-              (eval-in-session client
-                               (cljs-eval-form build-id form-str)
-                               (:timeout-ms opts default-timeout-ms))]
-          (cond
-            ex (r/err :cljs-eval/threw {:build build-id :ex ex :printed printed})
-
-            (contains? status :eval-error)
-            (r/err :cljs-eval/eval-error {:build build-id :printed printed})
-
-            (empty? values)
-            (r/err :cljs-eval/no-value {:build build-id :printed printed})
-
-            :else
-            (let [raw (last values)
-                  ;; shadow's cljs-eval returns {:results ["<printed>"] :err ...}
-                  parsed (read-edn raw)
-                  results (when (map? parsed) (:results parsed))
-                  value (if (seq results)
-                          (read-edn (last results))
-                          parsed)]
-              (if (and (map? parsed) (seq (:err parsed)))
-                (r/err :cljs-eval/runtime-error {:build build-id
-                                                 :detail (:err parsed)})
-                (r/ok {:value value :printed printed})))))
-        (catch Exception e
-          (r/err :cljs-eval/transport-failed {:cause (.getMessage e)})))
-      (r/err :cljs-eval/not-connected {})))
+    (let [{:keys [runtime-id] :as conn} @conn-atom]
+      (run-cljs conn build-id form-str runtime-id
+                (:timeout-ms opts default-timeout-ms))))
 
   (runtime-available? [this build-id]
     (let [res (ports/eval-cljs this build-id "1")]
-      (and (r/ok? res) (= 1 (get-in res [:ok :value]))))))
+      (and (r/ok? res) (= 1 (get-in res [:ok :value])))))
+
+  ports/IRuntimeAffinity
+  (bind-runtime! [_ build-id token]
+    (let [res (find-runtime @conn-atom build-id token
+                            (:timeout-ms opts default-timeout-ms))]
+      (when (r/ok? res)
+        (swap! conn-atom assoc :runtime-id (:ok res)))
+      res))
+
+  (unbind-runtime! [_]
+    (swap! conn-atom dissoc :runtime-id)
+    (r/ok nil)))
 
 (defn connect!
   "Open an nREPL connection for cljs evaluation.

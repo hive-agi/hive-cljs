@@ -65,11 +65,60 @@
       (is (= :fail (:run/state rep)))
       (is (= :expect-sub (:step/kind (last (:run/steps rep))))))))
 
-(deftest missing-runtime-port-skips-rather-than-explodes
+(deftest missing-runtime-port-is-incomplete-never-green
   (let [d   {:driver (stub/driver) :cljs-eval nil}
         rep (:ok (boundary/run-scenario! d fix/manifest :login))]
-    (is (= :skipped (:step/state (last (:run/steps rep)))))
-    (is (= :pass (:run/state rep)))))
+    (testing "the run still produces a report rather than exploding"
+      (is (some? rep))
+      (is (= [:goto :fill :click :expect-text :expect-sub]
+             (mapv :step/kind (:run/steps rep)))))
+    (testing "the unrunnable assertion is :incomplete, and it decides the run"
+      (is (= :incomplete (:step/state (last (:run/steps rep)))))
+      (is (= :incomplete (:run/state rep)))
+      (is (not (verdict/run-ok? rep))))
+    (testing "browser steps still report their own truth"
+      (is (= [:pass :pass :pass :pass]
+             (mapv :step/state (butlast (:run/steps rep))))))))
+
+(deftest runtime-channel-is-pinned-to-the-driven-page
+  (let [d   (deps)
+        rep (:ok (boundary/run-scenario! d fix/manifest :login))]
+    (testing "the session is stamped once, and the runtime binds to that stamp"
+      (let [[token] (stub/marks (:driver d))]
+        (is (some? token))
+        (is (= [[:app token]] (stub/binds (:cljs-eval d))))))
+    (is (verdict/run-ok? rep))
+    (testing "the pin is released when the run ends"
+      (is (nil? (stub/bound-runtime (:cljs-eval d)))))))
+
+(deftest an-unidentifiable-page-is-incomplete-not-a-silent-pass
+  (let [d   {:driver     (stub/driver)
+             :cljs-eval  (stub/cljs-eval (constantly true)
+                                         {:accept-any-token? false :runtimes {}})
+             :build-tool (stub/build-tool)}
+        rep (:ok (boundary/run-scenario! d fix/manifest :login))]
+    (testing "the assertion never ran against an arbitrary runtime"
+      (is (= :incomplete (:step/state (last (:run/steps rep)))))
+      (is (= :incomplete (:run/state rep)))
+      (is (not (verdict/run-ok? rep))))
+    (testing "no runtime eval was attempted once binding failed"
+      (is (empty? (stub/evals (:cljs-eval d)))))
+    (testing "binding is attempted once per run, not once per runtime step"
+      (is (= 1 (count (stub/binds (:cljs-eval d))))))))
+
+(deftest ports-without-affinity-still-run
+  (testing "a driver that cannot stamp falls back to the unpinned channel"
+    (let [d   {:driver (stub/driver-without-marking) :cljs-eval (stub/cljs-eval)
+               :build-tool (stub/build-tool)}
+          rep (:ok (boundary/run-scenario! d fix/manifest :login))]
+      (is (verdict/run-ok? rep))
+      (is (empty? (stub/binds (:cljs-eval d))))))
+  (testing "an eval channel that cannot pin falls back too"
+    (let [d   {:driver (stub/driver) :cljs-eval (stub/cljs-eval-without-affinity)
+               :build-tool (stub/build-tool)}
+          rep (:ok (boundary/run-scenario! d fix/manifest :login))]
+      (is (verdict/run-ok? rep))
+      (is (empty? (stub/marks (:driver d)))))))
 
 (deftest missing-driver-is-a-typed-error
   (let [res (boundary/run-scenario! {:cljs-eval (stub/cljs-eval)} fix/manifest :login)]

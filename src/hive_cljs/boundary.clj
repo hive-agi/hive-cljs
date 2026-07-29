@@ -178,7 +178,8 @@
   [cljs-eval build-id op]
   (cond
     (nil? cljs-eval)
-    {:state :skipped :detail "no cljs runtime configured (:nrepl-port missing)"}
+    {:state :incomplete
+     :detail "no CLJS eval port connected — set :nrepl-port and check the shadow nREPL is reachable (`cljs close` re-probes a cached dead connection)"}
 
     (nil? build-id)
     {:state :error
@@ -202,10 +203,29 @@
 ;; Plan execution
 ;; =============================================================================
 
+(defn- affinity-possible?
+  "True when both ports can identify the driven page to each other."
+  [{:keys [driver cljs-eval]}]
+  (and (ports/page-marker? driver) (ports/runtime-affinity? cljs-eval)))
+
+(defn- runtime-binding
+  "Bind the runtime channel to the driven page, at most once per run.
+   Returns nil when bound, or an outcome map when binding failed."
+  [{:keys [cljs-eval]} state build-id token]
+  (if (contains? @state :binding)
+    (:binding @state)
+    (let [res     (ports/bind-runtime! cljs-eval build-id token)
+          outcome (when (r/err? res)
+                    {:state :incomplete
+                     :detail (str "runtime not bound to the driven page: " (pr-str res))})]
+      (swap! state assoc :binding outcome)
+      outcome)))
+
 (defn- outcome-of
-  [{:keys [driver cljs-eval]} session build-id op]
+  [{:keys [driver cljs-eval] :as deps} state session build-id token op]
   (if (= :runtime (:op/channel op))
-    (perform-runtime! cljs-eval build-id op)
+    (or (when (and token cljs-eval) (runtime-binding deps state build-id token))
+        (perform-runtime! cljs-eval build-id op))
     (let [res (ports/perform! driver session op)]
       (if (r/err? res) {:state :error :detail (pr-str res)} (:ok res)))))
 
@@ -214,9 +234,14 @@
 
    deps: {:driver IBrowserDriver (required when the plan has browser ops)
           :cljs-eval ICljsEval   (required when the plan has runtime ops)}
+
+   When both ports support it, the session is stamped and the runtime channel is
+   pinned to that stamp, so state assertions read the browser this run drives.
    Steps after the first failure are reported as :skipped."
   [deps plan]
-  (let [needs-browser? (contains? (plan/channels-used plan) :browser)
+  (let [channels       (plan/channels-used plan)
+        needs-browser? (contains? channels :browser)
+        needs-runtime? (contains? channels :runtime)
         started        (System/currentTimeMillis)]
     (if (and needs-browser? (nil? (:driver deps)))
       (r/err :run/no-driver {:scenario (:plan/scenario plan)})
@@ -225,7 +250,11 @@
                           (r/ok nil))]
         (if (r/err? session-res)
           session-res
-          (let [session (:ok session-res)]
+          (let [session (:ok session-res)
+                token   (when (and session needs-runtime? (affinity-possible? deps))
+                          (let [t (str (random-uuid))]
+                            (when (r/ok? (ports/mark-session! (:driver deps) session t)) t)))
+                state   (atom {})]
             (try
               (let [{:keys [results artifacts]}
                     (reduce
@@ -233,7 +262,7 @@
                        (if halted
                          (update acc :results conj
                                  (verdict/skipped-result idx op "earlier step failed"))
-                         (let [outcome (outcome-of deps session (:plan/build plan) op)
+                         (let [outcome (outcome-of deps state session (:plan/build plan) token op)
                                result  (verdict/step-result idx op outcome)]
                            (-> acc
                                (assoc :halted (contains? #{:fail :error} (:step/state result)))
@@ -245,6 +274,7 @@
                                       {:elapsed-ms (- (System/currentTimeMillis) started)
                                        :artifacts artifacts})))
               (finally
+                (when token (ports/unbind-runtime! (:cljs-eval deps)))
                 (when session (ports/close-session! (:driver deps) session))))))))))
 
 (defn run-scenario!

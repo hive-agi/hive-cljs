@@ -165,6 +165,11 @@
       :webkit  (.launch (.webkit pw) opts)
       (.launch (.chromium pw) opts))))
 
+(defn token-script
+  "JS source stamping `token` onto the document as `window.__hiveCljsToken`."
+  [token]
+  (str "window.__hiveCljsToken = " (pr-str (str token)) ";"))
+
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
   (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir]}]
@@ -200,7 +205,17 @@
       (swap! pw-atom disj session)
       (r/ok nil)
       (catch Throwable e
-        (r/err :browser/close-failed {:cause (.getMessage e)})))))
+        (r/err :browser/close-failed {:cause (.getMessage e)}))))
+
+  ports/IPageMarker
+  (mark-session! [_ session token]
+    (try
+      (let [script (token-script token)]
+        (.addInitScript ^BrowserContext (:context session) script)
+        (.evaluate (page-of session) script)
+        (r/ok token))
+      (catch Throwable e
+        (r/err :browser/mark-failed {:cause (.getMessage e)})))))
 
 (defn driver
   "Construct the Playwright-backed IBrowserDriver."

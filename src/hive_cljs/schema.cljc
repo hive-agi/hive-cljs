@@ -197,7 +197,7 @@
    [:plan/ops [:vector {:min 1} Op]]])
 
 (def StepState
-  [:enum :pass :fail :error :skipped])
+  [:enum :pass :fail :error :skipped :incomplete])
 
 (def StepResult
   [:map {:closed true}
@@ -208,7 +208,7 @@
    [:step/elapsed-ms {:optional true} Millis]])
 
 (def RunState
-  [:enum :pass :fail :error])
+  [:enum :pass :fail :error :incomplete])
 
 (def RunReport
   [:map {:closed true}

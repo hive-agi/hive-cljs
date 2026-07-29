@@ -6,6 +6,9 @@ project root.
 
 One addon. One `cljs` subdomain on the `code` tool. Three ports.
 
+Runtime assertions are pinned to the page the scenario drives, and a step that
+could not be attempted is `:incomplete` — never a silent pass.
+
 ## Documentation
 
 | | |
@@ -36,6 +39,12 @@ browser.
 
 That split is also a debugging instrument: `:expect-text` red while `:expect-sub`
 green localises a bug to rendering rather than state.
+
+For that reading to be trustworthy the runtime assertion has to be about the page
+the scenario is driving — so hive-cljs stamps the page it opens and pins
+evaluation to it. Otherwise any other connected runtime (a stray tab, a forgotten
+headless browser, the shadow UI) answers instead, and the scenario grades the
+wrong page while reporting green.
 
 ## Quick start
 
@@ -127,7 +136,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 115 tests, 529 assertions — stubs only, no vendors needed
+clojure -M:test    # 118 tests, 552 assertions — stubs only, no vendors needed
 ```
 
 ## License

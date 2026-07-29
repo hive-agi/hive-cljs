@@ -38,14 +38,27 @@
   (is (= :fail (verdict/run-state [{:step/state :pass} {:step/state :fail}])))
   (is (= :error (verdict/run-state [{:step/state :fail} {:step/state :error}])))
   (testing "skipped alone does not fail a run"
-    (is (= :pass (verdict/run-state [{:step/state :pass} {:step/state :skipped}])))))
+    (is (= :pass (verdict/run-state [{:step/state :pass} {:step/state :skipped}]))))
+  (testing "a step that could not be attempted leaves the run undecided"
+    (is (= :incomplete (verdict/run-state [{:step/state :pass} {:step/state :incomplete}])))
+    (is (not (verdict/run-ok? {:run/state :incomplete}))))
+  (testing "a real failure outranks an incomplete step"
+    (is (= :fail (verdict/run-state [{:step/state :incomplete} {:step/state :fail}])))
+    (is (= :error (verdict/run-state [{:step/state :incomplete} {:step/state :error}])))))
 
 (deftest reports-conform-and-summarize
   (let [rep (verdict/report :login [{:step/index 0 :step/kind :goto :step/state :pass}
                                     {:step/index 1 :step/kind :click :step/state :fail}]
                             {:elapsed-ms 42})]
     (is (m/validate s/RunReport rep) (pr-str (m/explain s/RunReport rep)))
-    (is (= "login: fail (1 pass, 1 fail, 0 error, 0 skipped)" (verdict/summarize rep)))))
+    (is (= "login: fail (1 pass, 1 fail, 0 error, 0 incomplete, 0 skipped)"
+           (verdict/summarize rep))))
+  (testing "an incomplete step is counted and named in the summary"
+    (let [rep (verdict/report :login [{:step/index 0 :step/kind :goto :step/state :pass}
+                                      {:step/index 1 :step/kind :expect-sub :step/state :incomplete}])]
+      (is (m/validate s/RunReport rep) (pr-str (m/explain s/RunReport rep)))
+      (is (= "login: incomplete (1 pass, 0 fail, 0 error, 1 incomplete, 0 skipped)"
+             (verdict/summarize rep))))))
 
 (deftest sync-db-folds-relay-changes
   (let [snap (sync-db/apply-snapshot
