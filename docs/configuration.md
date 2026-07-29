@@ -1,7 +1,7 @@
 # Configuration reference
 
-hive-cljs reads its config from **either or both** of two files in the project
-root. Nothing is required beyond one build id.
+hive-cljs reads its config from **either or both** of two files, found by walking
+up from the directory you invoked it in. Nothing is required beyond one build id.
 
 ## The two sources
 
@@ -32,9 +32,64 @@ Inside `.hive-project.edn` both spellings work — nested short keys
 Flat wins on collision. Descriptor keys that are not hive-cljs's (`:project-id`,
 `:carto`, …) are ignored.
 
-`cljs doctor` reports which files were actually used under `:manifest/sources`.
-Neither file present — or a descriptor with no `:hive.cljs` keys — yields
-`:manifest/not-found` listing both paths searched.
+## Where config is found
+
+Two separate mechanisms, deliberately: one always on, one you ask for.
+
+**Discovery is unconditional.** Resolution walks up from `directory` to the
+nearest ancestor that authors hive-cljs config, exactly as git walks up to the
+nearest `.gitignore`. That directory becomes `:manifest/root`. So `cljs doctor`
+works from a subdirectory:
+
+```
+my-app/.hive-project.edn          ← authors config
+my-app/src/frontend/widgets/      ← invoke from here; root resolves to my-app/
+```
+
+Because `:manifest/root` moves, `:artifacts-dir` and the inferred `:base-url`
+derive from the project, not from where you happened to stand.
+
+**Inheritance is opt-in.** An ancestor that also authors config contributes
+nothing unless the nearest level asks for it:
+
+```clojure
+;; workspace/.hive-project.edn — shared conventions
+{:project-id "workspace"
+ :hive.cljs  {:e2e {:browser :chromium :headless true :timeout-ms 15000}}}
+
+;; workspace/my-app/hive-cljs.edn — opts in, overrides one key
+{:hive.cljs/inherit true
+ :hive.cljs/e2e     {:timeout-ms 30000}
+ :hive.cljs/builds  {:app {:http-port 8280}}}
+```
+
+resolves to chromium, headless, `:timeout-ms 30000`. Drop `:hive.cljs/inherit`
+and the workspace defaults are simply not consulted — a parent descriptor can
+never silently change a child's `:base-url` or `:port` behind your back.
+
+`:manifest/sources` lists every file that contributed, **highest precedence
+first**: `hive-cljs.edn` before `.hive-project.edn` within a level, nearest level
+before its ancestors. `cljs doctor` surfaces it, so the question "where did this
+value come from, and what would I have to change to override it?" has one answer.
+
+No level authors config ⇒ `:manifest/not-found`, carrying `:searched` (every path
+examined on the way up) and `:candidates` — directories *below* you that do author
+config, found to a bounded depth. Invoking from a workspace root with four apps
+underneath lists all four rather than guessing one.
+
+## `#hive/env` — values from the environment
+
+Any config value may be read from the environment, for harnesses that assign
+ports at run time:
+
+```clojure
+{:hive.cljs/shadow {:port       #hive/env SHADOW_PORT
+                    :nrepl-port #hive/env [SHADOW_NREPL_PORT 7889]}}
+```
+
+Bare form: the variable's value, or `nil` when unset. Vector form: the second
+element is the fallback for unset-or-blank. A value that reads as an integer is
+coerced to a long, so `:port` type-checks without a wrapper.
 
 ## Sections
 
@@ -126,3 +181,39 @@ returned as `:manifest/invalid` with a humanized explanation rather than throwin
 ```
 
 Unparseable EDN gives `:manifest/unreadable` with the cause.
+
+## Trusting what you resolved — `cljs staleness`
+
+A session caches the resolved manifest. `cljs staleness` reports whether that
+cached view still describes reality:
+
+```clojure
+code {command: "cljs staleness", directory: "/path/to/my-app"}
+```
+
+```clojure
+{:staleness/manifest        :stale
+ :staleness/sources         [{:source/path "…/hive-cljs.edn" :source/exists? true
+                              :source/modified 1753… :source/size 412} …]
+ :staleness/server          :mismatch
+ :staleness/declared-builds [:app]
+ :staleness/reported-builds [:other-app]}
+```
+
+| Key | Reads |
+|---|---|
+| `:staleness/manifest` | `:stale` when a contributing file changed on disk since the session opened |
+| `:staleness/server` | `:ok` when the connected server serves a build we declare, `:mismatch` when the sets are disjoint, `:unknown` when either side is empty |
+
+`:mismatch` is the port-drift trap from [setup.md](setup.md) step 3 made visible:
+you are talking to *another project's* shadow server, and every verdict it gives
+you is confident and wrong. `cljs doctor` carries the same verdict under
+`:server`, plus a `:warnings` entry spelling it out.
+
+Both axes need two witnesses. Nothing recorded on either side reports `:unknown`,
+never a reassuring `:ok` — an unverified claim is not a passing one.
+
+Reading the report is not required to get fresh config: any command reopens the
+session automatically when its sources changed. `staleness` reports against the
+view as it was *before* the call, so an edit is still visible in the report that
+refreshes it.

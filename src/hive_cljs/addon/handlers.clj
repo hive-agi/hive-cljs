@@ -51,6 +51,10 @@
   [params]
   (system/doctor (root-of params)))
 
+(defn staleness
+  [params]
+  (system/staleness (root-of params)))
+
 (defn status
   "Build verdicts — one build or all known."
   [params]

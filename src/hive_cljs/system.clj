@@ -9,7 +9,8 @@
             [hive-cljs.shadow.nrepl :as shadow-nrepl]
             [hive-cljs.shadow.relay :as relay]
             [hive-dsl.result :as r]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-cljs.staleness :as staleness]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -36,7 +37,7 @@
   "Build a session for `root`: manifest + whichever ports connect.
 
    Returns a Result of
-   {:manifest … :build-tool … :cljs-eval … :driver … :errors {port err}}"
+   {:manifest … :sources … :build-tool … :cljs-eval … :driver … :errors {port err}}"
   [root]
   (r/bind
    (boundary/load-manifest root)
@@ -46,6 +47,7 @@
            drv     (browser/driver)
            session {:root       (str root)
                     :manifest   manifest
+                    :sources    (boundary/source-stamps (:manifest/sources manifest))
                     :build-tool (when (r/ok? bt) (:ok bt))
                     :cljs-eval  (when (r/ok? ce) (:ok ce))
                     :driver     (when (r/ok? drv) (:ok drv))
@@ -56,12 +58,15 @@
        (swap! sessions assoc (str root) session)
        (r/ok session)))))
 
-(defn session
-  "Existing session for root, opening one when absent."
-  [root]
-  (if-let [s (get @sessions (str root))]
-    (r/ok s)
-    (open! root)))
+(defn current-stamps
+  "Stamps read now for the files a session's manifest was built from."
+  [s]
+  (boundary/source-stamps (mapv :source/path (:sources s))))
+
+(defn stale?
+  "True when a session's contributing files changed since it was opened."
+  [s]
+  (staleness/sources-changed? (:sources s) (current-stamps s)))
 
 (defn close!
   "Release a session's ports. Idempotent."
@@ -77,6 +82,15 @@
   (doseq [root (keys @sessions)] (close! root))
   (r/ok :closed))
 
+(defn session
+  "Existing session for root, reopening it when its config changed on disk."
+  [root]
+  (if-let [s (get @sessions (str root))]
+    (if (stale? s)
+      (do (close! (str root)) (open! root))
+      (r/ok s))
+    (open! root)))
+
 (defn run-deps
   "The `deps` map the boundary and supervisor expect."
   [session]
@@ -90,23 +104,64 @@
    :browser    (if (:driver session) :ok :down)
    :errors     (into {} (map (fn [[k v]] [k (:error v)])) (:errors session))})
 
+(defn reported-builds
+  "Build ids the connected toolchain actually serves, or nil when it is down."
+  [s]
+  (when-let [bt (:build-tool s)]
+    (let [res (ports/builds bt)]
+      (when (r/ok? res) (vec (:ok res))))))
+
+(defn- wrong-server-warning
+  [shadow declared reported]
+  {:warning :shadow/wrong-server
+   :detail  (str "shadow at " (:host shadow) ":" (:port shadow) " serves "
+                 (pr-str reported) " but this project declares " (pr-str declared)
+                 " — shadow takes the next free port when its own is busy, so the"
+                 " relay is talking to a different project's server")})
+
 (defn doctor
   "Manifest + connectivity diagnosis for a project root."
   [root]
   (let [res (session root)]
     (if (r/err? res)
       (r/ok {:manifest :invalid :detail res})
-      (let [s (:ok res)
-            m (:manifest s)]
-        (r/ok {:manifest      :ok
-               :root          (:root s)
-               :shadow        (:manifest/shadow m)
-               :builds        (vec (keys (:manifest/builds m)))
-               :scenarios     (mapv :id (get-in m [:manifest/e2e :scenarios]))
-               :base-url      (get-in m [:manifest/e2e :base-url])
-               :watch         (:manifest/watch m)
-               :ports         (health s)
-               :browser-adapter (if (browser/available?) :present :absent)})))))
+      (let [s        (:ok res)
+            m        (:manifest s)
+            shadow   (:manifest/shadow m)
+            declared (vec (keys (:manifest/builds m)))
+            reported (vec (reported-builds s))
+            match    (staleness/server-match declared reported)]
+        (r/ok {:manifest        :ok
+               :root            (:manifest/root m)
+               :invoked-from    (:root s)
+               :sources         (vec (:manifest/sources m))
+               :shadow          shadow
+               :builds          declared
+               :served-builds   reported
+               :server          match
+               :scenarios       (mapv :id (get-in m [:manifest/e2e :scenarios]))
+               :base-url        (get-in m [:manifest/e2e :base-url])
+               :watch           (:manifest/watch m)
+               :ports           (health s)
+               :browser-adapter (if (browser/available?) :present :absent)
+               :warnings        (cond-> []
+                                  (= :mismatch match)
+                                  (conj (wrong-server-warning shadow declared reported)))})))))
+
+(defn staleness
+  "Freshness of the cached view for `root` — manifest-vs-disk and server match.
+
+   Reported against the view as it was BEFORE this call, so an edit is still
+   visible in the report that refreshes it."
+  [root]
+  (let [cached (get @sessions (str root))]
+    (r/bind (session root)
+            (fn [s]
+              (r/ok (staleness/report
+                     {:cached-sources  (:sources (or cached s))
+                      :current-sources (current-stamps s)
+                      :declared-builds (vec (keys (get-in s [:manifest :manifest/builds])))
+                      :reported-builds (vec (reported-builds s))}))))))
 
 (defn ensure-port
   "Return a Result of the named port from a session, or the recorded error."

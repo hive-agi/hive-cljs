@@ -59,6 +59,11 @@ Config — in your existing `.hive-project.edn`:
 …or in a standalone `hive-cljs.edn`. Both work; both together merge, with the
 dedicated file winning. A single build id is the only required key.
 
+Either file is found by walking **up** from wherever you invoked, so a
+subdirectory works. A workspace can hold shared defaults, but a child inherits
+them only by asking: `:hive.cljs/inherit true`. Values can come from the
+environment with `#hive/env PORT`.
+
 Then, with `shadow-cljs watch app` running:
 
 ```clojure
@@ -76,6 +81,7 @@ input vocabulary and the watcher, in one small app.
 | Subcommand | Does |
 |---|---|
 | `cljs doctor` | validate config, report per-port connectivity |
+| `cljs staleness` | is the cached config still current, and does the server serve our builds |
 | `cljs status [build]` | build verdict — one build or all |
 | `cljs compile <build>` | one compile cycle, returns the verdict |
 | `cljs eval <build> <code>` | evaluate cljs in the running runtime |
@@ -121,7 +127,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 92 tests, 377 assertions — stubs only, no vendors needed
+clojure -M:test    # 115 tests, 529 assertions — stubs only, no vendors needed
 ```
 
 ## License

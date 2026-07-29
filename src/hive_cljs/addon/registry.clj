@@ -14,7 +14,10 @@
 (def subcommands
   "command string → {:fn handler :doc str :params [...]}"
   {"doctor"       {:fn h/doctor
-                   :doc "Validate hive-cljs.edn and report port connectivity"
+                   :doc "Validate hive-cljs config and report port connectivity"
+                   :params []}
+   "staleness"    {:fn h/staleness
+                   :doc "Report config-vs-disk freshness and whether the server serves our builds"
                    :params []}
    "status"       {:fn h/status
                    :doc "Build verdict for one build, or all known builds"

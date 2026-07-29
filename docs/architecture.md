@@ -70,7 +70,7 @@ Every test injects a stub through the ports — `StubBuildTool` (with
 suite runs with nothing installed:
 
 ```bash
-clojure -M:test    # 92 tests, 377 assertions
+clojure -M:test    # 115 tests, 529 assertions
 ```
 
 Pure layers additionally carry schema-synthesized property + mutation facets via

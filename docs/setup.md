@@ -197,6 +197,22 @@ The same execution path, from `deftest`:
 `explain` renders the summary plus the first failing step, so a red CI log tells
 you which step broke and what it saw.
 
+**Close what you opened, or the JVM will not exit.** A session holds a relay
+connection; a live connection keeps the process alive after the last `deftest`
+returns, so CI hangs on a suite that was already green. `close!` releases one
+project — a suite that touches more than one wants the whole-suite teardown:
+
+```clojure
+(use-fixtures :once (fn [f] (f) (cljs-e2e/close-all!)))
+```
+
+A shutdown hook is *not* an alternative here: the JVM runs hooks only once it has
+decided to exit, and it decides that only when the last non-daemon thread ends.
+The hook would run exactly when it is no longer needed. hive-cljs's own relay pool
+is created daemon for that reason, so a forgotten teardown degrades to a leaked
+connection rather than a wedged CI job — but closing explicitly is still the
+contract.
+
 ## Troubleshooting
 
 **A step fails but the app looks right in a screenshot.** Check whether the DOM
@@ -211,4 +227,18 @@ keystrokes never reached the renderer, in raw playwright-java with no hive code
 involved.
 
 **Build verdicts describe a project you don't recognise.** You are pointed at
-another shadow server; see the port warning in step 3.
+another shadow server; see the port warning in step 3. `cljs staleness` names it
+directly — `:staleness/server :mismatch` means the builds you declare and the
+builds that server actually serves are disjoint sets.
+
+**A config edit seems to have no effect.** `cljs staleness` reports
+`:staleness/manifest`; `:stale` means a contributing file changed since the
+session cached it. Any command reopens the session automatically in that case, so
+this is a diagnosis rather than a fix — if it reports `:fresh` while you expect
+otherwise, you edited a file that is not in `:manifest/sources`, and `cljs doctor`
+will tell you which files those are.
+
+**Config in a parent directory is ignored.** That is the default. Walking up to
+find the *nearest* config is unconditional, but *inheriting* from an ancestor is
+opt-in: set `:hive.cljs/inherit true` in the child. See
+[configuration.md](configuration.md#where-config-is-found).

@@ -13,7 +13,10 @@
             [hive-cljs.verdict :as verdict]
             [hive-dsl.result :as r]
             [taoensso.timbre :as log])
-  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]))
+  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]
+           [java.util.concurrent Executor]
+           [org.eclipse.jetty.util.thread QueuedThreadPool]
+           [org.eclipse.jetty.websocket.client WebSocketClient]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -75,7 +78,16 @@
    :connected?  false
    :client-id   nil
    :socket      nil
+   :ws-client   nil
    :last-error  nil})
+
+(defn- daemon-ws-client
+  "A websocket client whose threads cannot keep a host JVM from exiting."
+  ^WebSocketClient []
+  (let [pool (doto (QueuedThreadPool.)
+               (.setName "hive-cljs-relay")
+               (.setDaemon true))]
+    (WebSocketClient. ^Executor pool)))
 
 (defn- notify-subs!
   [state-ref prof build-ids]
@@ -205,10 +217,13 @@
    (r/bind
     (fetch-token prof conn)
     (fn [token]
-      (let [state-ref (atom (initial-state))]
+      (let [state-ref (atom (initial-state))
+            client    (daemon-ws-client)]
         (try
+          (.start client)
           (let [sock (ws/connect
                       (relay-url prof conn token)
+                      :client     client
                       :on-receive (fn [s]
                                     (when-let [msg (read-transit s)]
                                       (try (handle-msg! state-ref prof msg)
@@ -219,9 +234,10 @@
                                     (swap! state-ref assoc :last-error (str e)))
                       :on-close   (fn [_ _]
                                     (swap! state-ref assoc :connected? false)))]
-            (swap! state-ref assoc :socket sock)
+            (swap! state-ref assoc :socket sock :ws-client client)
             (r/ok (->ShadowRelay prof conn state-ref)))
           (catch Exception e
+            (try (.stop client) (catch Exception _ nil))
             (r/err :relay/connect-failed {:cause (.getMessage e)
                                           :url (relay-url prof conn "<token>")}))))))))
 
@@ -238,9 +254,11 @@
         :else (do (Thread/sleep 50) (recur))))))
 
 (defn disconnect!
-  "Close the relay socket. Idempotent."
+  "Close the relay socket and release its client. Idempotent."
   [^ShadowRelay relay]
-  (when-let [sock (:socket @(:state-ref relay))]
-    (try (ws/close sock) (catch Exception _ nil)))
-  (swap! (:state-ref relay) assoc :socket nil :connected? false)
+  (let [{:keys [socket ws-client]} @(:state-ref relay)]
+    (when socket (try (ws/close socket) (catch Exception _ nil)))
+    (when ws-client
+      (try (.stop ^WebSocketClient ws-client) (catch Exception _ nil))))
+  (swap! (:state-ref relay) assoc :socket nil :ws-client nil :connected? false)
   (r/ok nil))

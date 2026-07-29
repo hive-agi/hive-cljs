@@ -31,36 +31,128 @@
   [root]
   (str (str/replace (str root) #"/$" "") "/" manifest/project-filename))
 
+(defn- env-value
+  "`#hive/env VAR` or `#hive/env [VAR fallback]` → the environment value,
+   coerced to a long when it reads as an integer."
+  [spec]
+  (let [[var-name fallback] (if (sequential? spec) spec [spec nil])
+        raw (System/getenv (str var-name))]
+    (cond
+      (str/blank? raw)             fallback
+      (re-matches #"[-+]?\d+" raw) (parse-long raw)
+      :else                        raw)))
+
+(def ^:private edn-readers {'hive/env env-value})
+
 (defn- read-edn-file
   [f]
   (with-open [rdr (PushbackReader. (io/reader f))]
-    (edn/read rdr)))
+    (edn/read {:readers edn-readers} rdr)))
+
+(defn ancestor-dirs
+  "`root` and every ancestor directory, nearest first."
+  [root]
+  (loop [d   (.getAbsoluteFile (io/file (str root)))
+         acc []]
+    (if (nil? d)
+      acc
+      (recur (.getParentFile d) (conj acc (.getPath d))))))
+
+(defn file-stamp
+  "Filesystem facts about `path` → `schema/SourceStamp`."
+  [path]
+  (let [f       (io/file (str path))
+        exists? (.exists f)]
+    {:source/path     (str path)
+     :source/exists?  exists?
+     :source/modified (if exists? (.lastModified f) 0)
+     :source/size     (if exists? (.length f) 0)}))
+
+(defn source-stamps
+  "Stamps for every path, in the order given."
+  [paths]
+  (mapv file-stamp paths))
+
+(defn- level-config
+  "Config authored at one directory, or nil when that directory authors none.
+   `:sources` is ordered highest precedence first."
+  [dir]
+  (let [pp (project-path dir)
+        mp (manifest-path dir)
+        pf (io/file pp)
+        mf (io/file mp)
+        from-project (when (.exists pf) (manifest/project-config (read-edn-file pf)))
+        from-file    (when (.exists mf) (read-edn-file mf))
+        sources      (cond-> []
+                       (some? from-file)  (conj mp)
+                       (seq from-project) (conj pp))]
+    (when (seq sources)
+      {:dir dir
+       :raw (manifest/merge-config from-project from-file)
+       :sources sources})))
+
+(defn resolve-config
+  "Walk up from `root` and merge the config levels that apply.
+
+   The nearest directory that authors config decides the project root. Ancestor
+   levels merge underneath it only when that nearest level sets
+   `:hive.cljs/inherit true`. Returns {:root dir :raw merged :sources paths}
+   with sources highest precedence first, or nil when no level authors config."
+  [root]
+  (let [levels (keep level-config (ancestor-dirs root))]
+    (when-let [nearest (first levels)]
+      (let [chain (if (manifest/inherit? (:raw nearest)) (vec levels) [nearest])]
+        {:root    (:dir nearest)
+         :raw     (apply manifest/merge-config (map :raw (reverse chain)))
+         :sources (vec (mapcat :sources chain))}))))
+
+(def ^:private uninteresting-dirs
+  #{"node_modules" "target" "out" ".git" ".shadow-cljs" ".hive-cljs" ".cpcache"})
+
+(defn descendant-candidates
+  "Directories below `root` that author hive-cljs config, bounded by `max-depth`."
+  ([root] (descendant-candidates root 3))
+  ([root max-depth]
+   (letfn [(children [dir]
+             (->> (or (.listFiles (io/file dir)) [])
+                  (filter #(.isDirectory ^java.io.File %))
+                  (remove #(str/starts-with? (.getName ^java.io.File %) "."))
+                  (remove #(contains? uninteresting-dirs (.getName ^java.io.File %)))))
+           (walk [dir depth]
+             (if (neg? depth)
+               []
+               (into []
+                     (mapcat (fn [^java.io.File k]
+                               (let [p (.getPath k)]
+                                 (cond-> (walk p (dec depth))
+                                   (some? (level-config p)) (conj p)))))
+                     (children dir))))]
+     (try
+       (vec (sort (walk (str root) max-depth)))
+       (catch Exception _ [])))))
 
 (defn load-manifest
-  "Read hive-cljs config for `root` and return a Result of a normalized manifest.
+  "Resolve hive-cljs config for `root` and return a Result of a normalized manifest.
 
-   Two sources, either or both:
+   Two files author config at each directory level:
    - `.hive-project.edn` — a `:hive.cljs` submap, or flat `:hive.cljs/*` keys
    - `hive-cljs.edn`     — the dedicated file, which WINS on collision
 
-   Sections merge one level deep, so a project may keep connectivity in the
-   descriptor and scenarios in the dedicated file."
+   Resolution walks up from `root` and stops at the nearest directory that
+   authors config; that directory becomes `:manifest/root`. Ancestor levels are
+   merged underneath it only when the nearest level sets
+   `:hive.cljs/inherit true`. `:manifest/sources` lists every contributing file,
+   highest precedence first."
   [root]
-  (let [pf (io/file (project-path root))
-        mf (io/file (manifest-path root))]
-    (try
-      (let [from-project (when (.exists pf) (manifest/project-config (read-edn-file pf)))
-            from-file    (when (.exists mf) (read-edn-file mf))
-            sources      (cond-> []
-                           (seq from-project) (conj (project-path root))
-                           (some? from-file)  (conj (manifest-path root)))]
-        (if (empty? sources)
-          (r/err :manifest/not-found {:searched [(project-path root) (manifest-path root)]})
-          (manifest/parse (manifest/merge-config from-project from-file)
-                          (str root)
-                          sources)))
-      (catch Exception e
-        (r/err :manifest/unreadable {:root (str root) :cause (.getMessage e)})))))
+  (try
+    (if-let [{:keys [raw sources] resolved :root} (resolve-config root)]
+      (manifest/parse raw resolved sources)
+      (r/err :manifest/not-found
+             {:searched   (vec (mapcat (juxt manifest-path project-path)
+                                       (ancestor-dirs root)))
+              :candidates (descendant-candidates root)}))
+    (catch Exception e
+      (r/err :manifest/unreadable {:root (str root) :cause (.getMessage e)}))))
 
 ;; =============================================================================
 ;; Runtime-channel execution

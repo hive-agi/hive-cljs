@@ -62,3 +62,11 @@
   "Release the project's ports — use in a test fixture's teardown."
   [root]
   (system/close! root))
+
+(defn close-all!
+  "Release every open project's ports — the whole-suite teardown.
+
+   A JVM with a relay still connected cannot exit, so an embedded suite that
+   opens more than one project needs this rather than a per-root `close!`."
+  []
+  (system/close-all!))

@@ -157,6 +157,33 @@
    [:hive.cljs/watch {:optional true} [:map-of :keyword :any]]])
 
 ;; =============================================================================
+;; Staleness
+;; =============================================================================
+
+(def SourceStamp
+  "Filesystem facts about one file that contributed config."
+  [:map {:closed true}
+   [:source/path NonBlankString]
+   [:source/exists? :boolean]
+   [:source/modified Millis]
+   [:source/size [:int {:min 0}]]])
+
+(def ManifestFreshness
+  [:enum :fresh :stale])
+
+(def ServerMatch
+  "Whether the connected toolchain is serving the builds the manifest declares."
+  [:enum :ok :mismatch :unknown])
+
+(def StalenessReport
+  [:map {:closed true}
+   [:staleness/manifest ManifestFreshness]
+   [:staleness/sources [:vector SourceStamp]]
+   [:staleness/server ServerMatch]
+   [:staleness/declared-builds [:vector BuildId]]
+   [:staleness/reported-builds [:vector BuildId]]])
+
+;; =============================================================================
 ;; Run plan and report
 ;; =============================================================================
 

@@ -43,6 +43,20 @@
              (remove nil? configs))
       {}))
 
+(def inherit-key
+  "Config key by which a project opts in to ancestor config."
+  :hive.cljs/inherit)
+
+(defn inherit?
+  "True when a raw config asks for ancestor descriptors to be merged under it."
+  [raw]
+  (true? (get raw inherit-key)))
+
+(defn config-authored?
+  "True when a raw config carries anything beyond the inheritance switch."
+  [raw]
+  (boolean (seq (dissoc raw inherit-key))))
+
 (def default-shadow  {:host "localhost" :port 9630})
 (def default-e2e     {:browser :chromium :headless true :timeout-ms 15000})
 (def default-watch   {:on-build-success [] :on-build-failure [] :debounce-ms 500})
