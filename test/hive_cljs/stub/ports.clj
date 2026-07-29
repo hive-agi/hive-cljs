@@ -132,7 +132,15 @@
 
   (unbind-runtime! [_]
     (swap! state-ref dissoc :bound)
-    (r/ok nil)))
+    (r/ok nil))
+
+  ports/IRuntimeInventory
+  (connected-runtimes [_ build-id]
+    (if-let [e (:inventory-error @state-ref)]
+      (r/err e {:build build-id})
+      (r/ok (vec (get-in @state-ref [:connected build-id])))))
+
+  (pinned-runtime [_] (:bound @state-ref)))
 
 (defrecord StubCljsEvalNoAffinity [state-ref value-fn]
   ports/ICljsEval
@@ -148,14 +156,16 @@
 (defn cljs-eval
   "Affinity-capable eval stub. By default any stamp identifies a runtime;
    pass {:accept-any-token? false :runtimes {token id}} to model a page the
-   runtime channel cannot recognise."
+   runtime channel cannot recognise, {:connected {build-id [descriptor …]}} to
+   model what an inventory read sees, and {:inventory-error kw} to fail it."
   ([] (cljs-eval (constantly true)))
   ([value-fn] (cljs-eval value-fn {:accept-any-token? true}))
   ([value-fn opts]
    (->StubCljsEval (atom (merge {:evals [] :binds []} opts)) value-fn)))
 
 (defn cljs-eval-without-affinity
-  "An eval stub that cannot pin a runtime — exercises the degradation path."
+  "An eval stub carrying NEITHER optional capability — it cannot pin a runtime
+   and cannot enumerate one. Exercises both degradation paths."
   ([] (cljs-eval-without-affinity (constantly true)))
   ([value-fn] (->StubCljsEvalNoAffinity (atom {:evals [] :binds []}) value-fn)))
 

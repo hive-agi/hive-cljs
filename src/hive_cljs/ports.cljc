@@ -89,6 +89,17 @@
     "Drop any pin, returning to the toolchain's own runtime choice.
      Returns a Result of nil. Idempotent."))
 
+(defprotocol IRuntimeInventory
+  "Optional: report which runtimes the channel can see, and which one it uses."
+
+  (connected-runtimes [this build-id]
+    "Return a Result of [{:client-id … :user-agent … :host …} …] — every runtime
+     currently attached to build-id, in the toolchain's own order.")
+
+  (pinned-runtime [this]
+    "Return the runtime id `IRuntimeAffinity/bind-runtime!` pinned, or nil when
+     evaluation still goes to the toolchain's own choice."))
+
 ;; =============================================================================
 ;; Predicates
 ;; =============================================================================
@@ -98,3 +109,4 @@
 (defn cljs-eval? [x] (satisfies? ICljsEval x))
 (defn page-marker? [x] (satisfies? IPageMarker x))
 (defn runtime-affinity? [x] (satisfies? IRuntimeAffinity x))
+(defn runtime-inventory? [x] (satisfies? IRuntimeInventory x))

@@ -119,6 +119,44 @@
                  " — shadow takes the next free port when its own is busy, so the"
                  " relay is talking to a different project's server")})
 
+(defn runtimes
+  "Runtimes the session's eval channel can see, per declared build.
+
+   {:status :down}        the channel is not connected
+   {:status :unsupported} the adapter cannot enumerate runtimes
+   {:status :ok :pinned id-or-nil :by-build {build-id entry}}, where entry is
+   {:connected [{:client-id … :user-agent … :host …} …]} or {:error err}."
+  [s builds]
+  (let [ce (:cljs-eval s)]
+    (cond
+      (nil? ce)                           {:status :down}
+      (not (ports/runtime-inventory? ce)) {:status :unsupported}
+      :else
+      {:status   :ok
+       :pinned   (ports/pinned-runtime ce)
+       :by-build (into {}
+                       (map (fn [b]
+                              (let [res (ports/connected-runtimes ce b)]
+                                [b (if (r/ok? res)
+                                     {:connected (:ok res)}
+                                     {:error (:error res)})])))
+                       builds)})))
+
+(defn- crowded-builds
+  "Declared builds carrying more than one connected runtime."
+  [rts]
+  (->> (:by-build rts)
+       (filter (fn [[_ entry]] (< 1 (count (:connected entry)))))
+       (mapv key)))
+
+(defn- ambiguous-runtime-warning
+  [builds]
+  {:warning :runtime/ambiguous
+   :detail  (str "more than one runtime is connected to " (pr-str builds)
+                 " — a scenario pins the page it drives, but `cljs eval` has no"
+                 " page to pin to and answers from whichever runtime the"
+                 " toolchain picks")})
+
 (defn doctor
   "Manifest + connectivity diagnosis for a project root."
   [root]
@@ -130,7 +168,9 @@
             shadow   (:manifest/shadow m)
             declared (vec (keys (:manifest/builds m)))
             reported (vec (reported-builds s))
-            match    (staleness/server-match declared reported)]
+            match    (staleness/server-match declared reported)
+            rts      (runtimes s declared)
+            crowded  (crowded-builds rts)]
         (r/ok {:manifest        :ok
                :root            (:manifest/root m)
                :invoked-from    (:root s)
@@ -143,10 +183,14 @@
                :base-url        (get-in m [:manifest/e2e :base-url])
                :watch           (:manifest/watch m)
                :ports           (health s)
+               :runtimes        rts
                :browser-adapter (if (browser/available?) :present :absent)
                :warnings        (cond-> []
                                   (= :mismatch match)
-                                  (conj (wrong-server-warning shadow declared reported)))})))))
+                                  (conj (wrong-server-warning shadow declared reported))
+
+                                  (seq crowded)
+                                  (conj (ambiguous-runtime-warning crowded)))})))))
 
 (defn staleness
   "Freshness of the cached view for `root` — manifest-vs-disk and server match.

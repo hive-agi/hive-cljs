@@ -133,7 +133,17 @@
 
   (unbind-runtime! [_]
     (swap! conn-atom dissoc :runtime-id)
-    (r/ok nil)))
+    (r/ok nil))
+
+  ports/IRuntimeInventory
+  (connected-runtimes [_ build-id]
+    (let [res (eval-clj @conn-atom (repl-runtimes-form build-id)
+                        (:timeout-ms opts default-timeout-ms))]
+      (if (r/err? res)
+        res
+        (r/ok (vec (get-in res [:ok :value]))))))
+
+  (pinned-runtime [_] (:runtime-id @conn-atom)))
 
 (defn connect!
   "Open an nREPL connection for cljs evaluation.

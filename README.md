@@ -89,7 +89,7 @@ input vocabulary and the watcher, in one small app.
 
 | Subcommand | Does |
 |---|---|
-| `cljs doctor` | validate config, report per-port connectivity |
+| `cljs doctor` | validate config, report per-port connectivity and which runtimes are attached |
 | `cljs staleness` | is the cached config still current, and does the server serve our builds |
 | `cljs status [build]` | build verdict — one build or all |
 | `cljs compile <build>` | one compile cycle, returns the verdict |
@@ -136,7 +136,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 118 tests, 552 assertions — stubs only, no vendors needed
+clojure -M:test    # 122 tests, 568 assertions — stubs only, no vendors needed
 ```
 
 ## License

@@ -104,8 +104,24 @@ code {command: "cljs doctor", directory: "/abs/path/to/my-app"}
 {:manifest :ok
  :builds   [:app]
  :base-url "http://localhost:8280"
- :ports    {:build-tool :ok :cljs-eval :ok :browser :ok}}
+ :ports    {:build-tool :ok :cljs-eval :ok :browser :ok}
+ :runtimes {:status   :ok
+            :pinned   nil
+            :by-build {:app {:connected [{:client-id  66
+                                          :user-agent "Firefox 152.0 [Linux x86_64]"
+                                          :host       :browser}]}}}}
 ```
+
+`:runtimes` names every browser currently attached to each declared build — the
+thing that decides what a state assertion actually answers about, and otherwise
+invisible. `:pinned` is nil outside a run; during one it holds the runtime bound
+to the driven page. The channel reports `{:status :down}` when it never
+connected and `{:status :unsupported}` when the adapter cannot enumerate, so an
+empty inventory is never confused with an unanswerable question.
+
+More than one runtime on a build raises a `:runtime/ambiguous` warning. It is
+not a failure — scenarios pin their own page — but ad-hoc `cljs eval` has no page
+to pin to, so that is exactly when a manual eval starts disagreeing with a run.
 
 Any `:down` port carries a typed reason:
 
@@ -237,6 +253,11 @@ static HTML page. If it fails there too, the app is exonerated and the driver or
 environment is at fault — in one sandboxed shell here, focus landed but
 keystrokes never reached the renderer, in raw playwright-java with no hive code
 involved.
+
+**A manual `cljs eval` and a scenario disagree about the same state.** Read
+`:runtimes` in `cljs doctor`. A scenario pins the page it drives; an ad-hoc eval
+does not, so with two runtimes attached they can legitimately answer about
+different pages. Closing the stray tab makes the two agree.
 
 **Build verdicts describe a project you don't recognise.** You are pointed at
 another shadow server; see the port warning in step 3. `cljs staleness` names it

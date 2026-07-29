@@ -1,6 +1,6 @@
 # Architecture
 
-CPPB-stratified, three ports plus two optional capabilities. Dependencies point
+CPPB-stratified, three ports plus three optional capabilities. Dependencies point
 down; effects live only at the boundary.
 
 ```
@@ -36,21 +36,29 @@ A vendor is named **only** in an adapter namespace. Everything above depends on
 `ICljsEval` is what makes this more than a Playwright wrapper — it lets one
 scenario assert on the DOM and on live re-frame state.
 
-## The two optional capabilities
+## The optional capabilities
 
 Segregated rather than folded into the ports above: an adapter that implements
-neither still works, and third-party implementations of the three ports keep
+none still works, and third-party implementations of the three ports keep
 compiling.
 
 ```clojure
 (defprotocol IPageMarker        ; browser side
   (mark-session! [this session token]))
 
-(defprotocol IRuntimeAffinity   ; runtime side
+(defprotocol IRuntimeAffinity   ; runtime side — mutates
   (bind-runtime! [this build-id token]) (unbind-runtime! [this]))
+
+(defprotocol IRuntimeInventory  ; runtime side — observes
+  (connected-runtimes [this build-id]) (pinned-runtime [this]))
 ```
 
-Together they answer *which page am I asserting about*. The driver stamps every
+`IRuntimeInventory` is what `doctor` reports under `:runtimes`. It is kept apart
+from `IRuntimeAffinity` because observing is not binding: an adapter may be able
+to say what is attached without being able to pin anything, and adding a method
+to the shipped affinity protocol would break every implementation of it.
+
+The first two answer *which page am I asserting about*. The driver stamps every
 document its session loads with a token; the eval channel finds the connected
 runtime carrying that token and pins evaluation to it. Without this the CLJS REPL
 answers from whatever runtime the toolchain happens to pick, so any other open tab
@@ -104,7 +112,7 @@ Every test injects a stub through the ports — `StubBuildTool` (with
 suite runs with nothing installed:
 
 ```bash
-clojure -M:test    # 118 tests, 552 assertions
+clojure -M:test    # 122 tests, 568 assertions
 ```
 
 The stubs also model the *absence* of the optional capabilities —
@@ -114,8 +122,11 @@ path is covered rather than assumed.
 A stub can only discharge a contract it actually mirrors. The runtime-affinity
 work was additionally verified against real ports by an A/B on a live app with a
 decoy browser open: pinned passed, and the same run with `IPageMarker` reified
-away failed on the decoy's state. Where a stub cannot express the hazard, the
-real-port check is the evidence.
+away failed on the decoy's state. The inventory report was verified the same way
+— one runtime and no warning, then a second browser opened on the same build and
+the `:runtime/ambiguous` warning appeared with both user-agents named. A stub
+holds one runtime by construction and cannot express either hazard; where that is
+true, the real-port check is the evidence.
 
 Pure layers additionally carry schema-synthesized property + mutation facets via
 `hive-schemas.test/deftrifecta-from-schema` — no hand-written generators.
@@ -132,5 +143,5 @@ a `:rel` restating the decision.
 | add a step kind | append an `IStepRule` (+ a `perform-op` defmethod for browser kinds) |
 | support another build tool | implement `IBuildTool`, register a relay profile |
 | swap the browser | implement `IBrowserDriver` (+ `IPageMarker` to keep runtime pinning) |
-| swap the runtime channel | implement `ICljsEval` (+ `IRuntimeAffinity` to keep runtime pinning) |
+| swap the runtime channel | implement `ICljsEval` (+ `IRuntimeAffinity` to keep runtime pinning, `IRuntimeInventory` to keep doctor's runtime report) |
 | change what a build event triggers | add a `:hive.cljs/watch` action and a `watch/action->decision` case |

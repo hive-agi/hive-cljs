@@ -12,7 +12,9 @@
             [hive-cljs.manifest :as manifest]
             [hive-cljs.shadow.relay :as relay]
             [hive-cljs.system :as system]
-            [hive-dsl.result :as r])
+            [hive-dsl.result :as r]
+            [hive-cljs.ports :as ports]
+            [hive-cljs.stub.ports :as stub])
   (:import [java.io File]
            [java.net ServerSocket]
            [org.eclipse.jetty.websocket.client WebSocketClient]))
@@ -216,3 +218,59 @@
         (is (= [] (non-daemon-relay-thread-names)))
         (finally
           (try (.stop client) (catch Exception _ nil)))))))
+
+;; =============================================================================
+;; What the report can say about the runtime channel
+;; =============================================================================
+
+(deftest a-runtime-report-degrades-to-a-typed-absence
+  (testing "a channel that never connected is :down, not an empty inventory"
+    (is (= {:status :down} (system/runtimes {} [:app]))))
+
+  (testing "a connected adapter that cannot enumerate is :unsupported, not empty"
+    (is (= {:status :unsupported}
+           (system/runtimes {:cljs-eval (stub/cljs-eval-without-affinity)} [:app])))))
+
+(deftest runtimes-are-reported-per-declared-build
+  (testing (str "COVERED: the shape doctor publishes — one entry per DECLARED "
+                "build, an empty vector for a build nothing is attached to, and "
+                "the pin read off the same channel. NOT COVERED: whether a real "
+                "toolchain enumerates the same runtimes it evaluates in — a stub "
+                "answers both from one map by construction.")
+    (let [ce  (stub/cljs-eval (constantly true)
+                              {:accept-any-token? true
+                               :connected {:app [{:client-id 1 :user-agent "chrome"}
+                                                 {:client-id 2 :user-agent "firefox"}]
+                                           :admin []}})
+          rts (system/runtimes {:cljs-eval ce} [:app :admin])]
+      (is (= :ok (:status rts)))
+      (is (= [1 2] (mapv :client-id (get-in rts [:by-build :app :connected]))))
+      (is (= [] (get-in rts [:by-build :admin :connected])))
+      (is (nil? (:pinned rts)) "nothing is pinned until a run binds")
+
+      (testing "and the pin becomes visible once a run binds one"
+        (is (r/ok? (ports/bind-runtime! ce :app "stamp")))
+        (is (= 1 (:pinned (system/runtimes {:cljs-eval ce} [:app]))))))))
+
+(deftest a-build-whose-inventory-read-fails-does-not-sink-the-report
+  (let [ce  (stub/cljs-eval (constantly true)
+                            {:inventory-error :cljs-eval/threw :connected {}})
+        rts (system/runtimes {:cljs-eval ce} [:app])]
+    (is (= :ok (:status rts)))
+    (is (= :cljs-eval/threw (get-in rts [:by-build :app :error])))
+    (is (nil? (get-in rts [:by-build :app :connected]))
+        "a failed read reports the error, never an empty inventory")))
+
+(deftest a-second-runtime-on-a-build-is-warned-about
+  (let [crowded #'system/crowded-builds
+        warn    #'system/ambiguous-runtime-warning]
+    (testing "one runtime, or none, is unremarkable"
+      (is (= [] (crowded {:by-build {:app {:connected [{:client-id 1}]}
+                                     :admin {:connected []}}})))
+      (is (= [] (crowded {:status :down}))))
+
+    (testing "two runtimes on a build are named, and the warning says why it matters"
+      (let [builds (crowded {:by-build {:app {:connected [{:client-id 1} {:client-id 2}]}}})]
+        (is (= [:app] builds))
+        (is (= :runtime/ambiguous (:warning (warn builds))))
+        (is (re-find #"cljs eval" (:detail (warn builds))))))))
