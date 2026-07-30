@@ -51,18 +51,24 @@
 (defn build-plan
   "Manifest + scenario → Result of `schema/RunPlan`.
 
-   A scenario without :build inherits the project's sole build id."
+   A scenario without :build inherits the project's sole build id. A frame id
+   (scenario :frame, else e2e :frame) is stamped onto runtime ops so re-frame2
+   frame-scoped apps get frame-pinned subscribe/dispatch/db reads."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
    (let [base-url (get-in manifest [:manifest/e2e :base-url])
          compiled (step/compile-steps rules (:steps scenario))
-         build    (or (:build scenario) (default-build manifest))]
+         build    (or (:build scenario) (default-build manifest))
+         frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))]
      (if (r/err? compiled)
        compiled
        (r/ok (cond-> {:plan/scenario (:id scenario)
                       :plan/base-url base-url
                       :plan/session  (session-opts manifest)
-                      :plan/ops      (resolve-urls base-url (:ok compiled))}
+                      :plan/ops      (cond->> (resolve-urls base-url (:ok compiled))
+                                       frame (mapv #(if (= :runtime (:op/channel %))
+                                                      (assoc % :op/frame frame)
+                                                      %)))}
                build (assoc :plan/build build)))))))
 
 (defn plan-for-id

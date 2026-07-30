@@ -97,6 +97,7 @@
    [:op/kind :keyword]
    [:op/channel OpChannel]
    [:op/args [:vector :any]]
+   [:op/frame {:optional true} :keyword]
    [:op/expect {:optional true} [:map-of :keyword :any]]
    [:op/source Step]])
 
@@ -104,6 +105,7 @@
   [:map {:closed true}
    [:id ScenarioId]
    [:build {:optional true} BuildId]
+   [:frame {:optional true} :keyword]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -124,6 +126,7 @@
    [:browser BrowserEngine]
    [:headless :boolean]
    [:timeout-ms Millis]
+   [:frame {:optional true} :keyword]
    [:artifacts-dir NonBlankString]
    [:scenarios [:vector Scenario]]])
 

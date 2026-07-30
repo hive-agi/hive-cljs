@@ -91,6 +91,7 @@
   (cond-> {:id    (:id raw)
            :steps (vec (:steps raw))}
     (:build raw) (assoc :build (:build raw))
+    (:frame raw) (assoc :frame (:frame raw))
     (:doc raw)   (assoc :doc (:doc raw))
     (seq (:tags raw)) (assoc :tags (set (:tags raw)))))
 
@@ -110,7 +111,7 @@
             :artifacts-dir (or (:artifacts-dir raw)
                                (str (str/replace root #"/$" "") "/" default-artifacts-dir))
             :scenarios     (mapv normalize-scenario (:scenarios raw))}
-           (select-keys raw [:browser :headless :timeout-ms]))))
+           (select-keys raw [:browser :headless :timeout-ms :frame]))))
 
 (defn normalize-action
   "Coerce a watch action to the `[kind opts]` tuple shape."

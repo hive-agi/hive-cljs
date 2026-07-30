@@ -174,19 +174,36 @@
   (if (string? x) x (pr-str x)))
 
 (defn sub-form
-  "Source text that dereferences a re-frame subscription."
-  [query]
-  (str "@(re-frame.core/subscribe " (form->string query) ")"))
+  "Source text that dereferences a re-frame subscription. With a `frame` id the
+   deref is pinned via re-frame.core/with-frame — re-frame2 frame-scoped apps
+   refuse a bare subscribe with :rf.error/no-frame-context."
+  ([query] (sub-form query nil))
+  ([query frame]
+   (if frame
+     (str "(re-frame.core/with-frame " (form->string frame)
+          " @(re-frame.core/subscribe " (form->string query) "))")
+     (str "@(re-frame.core/subscribe " (form->string query) ")"))))
 
 (defn db-form
-  "Source text that reads a path out of the re-frame app-db."
-  [path]
-  (str "(get-in @re-frame.db/app-db " (form->string path) ")"))
+  "Source text that reads a path out of the re-frame app-db. With a `frame` id
+   the read goes through re-frame.core/app-db-value — re-frame2 keeps app-db
+   per frame, so the global re-frame.db/app-db atom is not the app's state."
+  ([path] (db-form path nil))
+  ([path frame]
+   (if frame
+     (str "(get-in (re-frame.core/app-db-value " (form->string frame) ") "
+          (form->string path) ")")
+     (str "(get-in @re-frame.db/app-db " (form->string path) ")"))))
 
 (defn dispatch-form
-  "Source text that dispatches a re-frame event synchronously."
-  [event]
-  (str "(do (re-frame.core/dispatch-sync " (form->string event) ") :dispatched)"))
+  "Source text that dispatches a re-frame event synchronously. With a `frame`
+   id the dispatch is pinned via re-frame.core/with-frame (re-frame2)."
+  ([event] (dispatch-form event nil))
+  ([event frame]
+   (if frame
+     (str "(do (re-frame.core/with-frame " (form->string frame)
+          " (re-frame.core/dispatch-sync " (form->string event) ")) :dispatched)")
+     (str "(do (re-frame.core/dispatch-sync " (form->string event) ") :dispatched)"))))
 
 (defn predicate-call
   "Apply an authored predicate form to a value expression."

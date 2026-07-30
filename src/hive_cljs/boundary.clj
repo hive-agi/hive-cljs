@@ -161,12 +161,13 @@
 (defn- runtime-expr
   "Source text a runtime op evaluates."
   [op]
-  (let [[a b] (:op/args op)]
+  (let [[a b] (:op/args op)
+        frame (:op/frame op)]
     (case (:op/kind op)
       :eval-cljs  (nrepl-forms/form->string a)
-      :dispatch   (nrepl-forms/dispatch-form a)
-      :expect-sub (nrepl-forms/predicate-call b (nrepl-forms/sub-form a))
-      :expect-db  (nrepl-forms/predicate-call b (nrepl-forms/db-form a))
+      :dispatch   (nrepl-forms/dispatch-form a frame)
+      :expect-sub (nrepl-forms/predicate-call b (nrepl-forms/sub-form a frame))
+      :expect-db  (nrepl-forms/predicate-call b (nrepl-forms/db-form a frame))
       (nrepl-forms/form->string a))))
 
 (defn- assertion-op?
