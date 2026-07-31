@@ -32,6 +32,27 @@ Inside `.hive-project.edn` both spellings work — nested short keys
 Flat wins on collision. Descriptor keys that are not hive-cljs's (`:project-id`,
 `:carto`, …) are ignored.
 
+### Keeping the project root uncluttered
+
+Config lives at the root because the directory that authors it *is*
+`:manifest/root`, and `:artifacts-dir`, the inferred `:base-url`, the
+`shadow-cljs.edn` lookup and the staleness source scan all derive from it. What
+the root does **not** have to carry:
+
+- **A second file.** A project that already has `.hive-project.edn` puts
+  `:hive.cljs {…}` there and never writes `hive-cljs.edn` at all.
+- **The scenarios.** Those are tests; [`:scenario-paths`](#scenario-paths--scenarios-live-with-the-rest-of-the-suite)
+  keeps them in `test/e2e/*.edn` beside the unit tests.
+
+So the tidiest layout is one descriptor holding connectivity, and the suite
+holding everything test-shaped:
+
+```
+my-app/.hive-project.edn      ← :hive.cljs {:shadow …, :builds …, :e2e {:scenario-paths ["test/e2e"]}}
+my-app/test/e2e/smoke.edn     ← the scenarios
+my-app/test/my_app/e2e_test.clj  ← (defscenarios) — see setup.md §7
+```
+
 ## Where config is found
 
 Two separate mechanisms, deliberately: one always on, one you ask for.

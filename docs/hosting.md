@@ -92,4 +92,7 @@ Nothing about the library requires a host. From a REPL or a test suite:
 (cljs-e2e/run-scenario! "/path/to/project" :login)
 ```
 
+In a test suite, `(hive-cljs.test/defscenarios)` generates a `deftest` per
+declared scenario over that same surface.
+
 See [setup.md](setup.md#7-in-a-test-suite).

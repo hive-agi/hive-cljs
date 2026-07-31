@@ -200,20 +200,60 @@ recent log. `cljs watch stop` unsubscribes.
 
 ## 7. In a test suite
 
-The same execution path, from `deftest`:
+Scenarios are tests, so they run as tests — `clojure -M:test`, kaocha, CI, the
+same reporter as everything else. One form generates the whole suite:
 
 ```clojure
 (ns my.app.e2e-test
+  (:require [hive-cljs.test :refer [defscenarios]]))
+
+(defscenarios)
+```
+
+That is the entire namespace. Expansion resolves the manifest by walking up from
+the JVM's working directory — no absolute path to keep in sync — and emits one
+`deftest` per declared scenario:
+
+```
+my.app.e2e-test/login      ← scenario :login
+my.app.e2e-test/checkout   ← scenario :checkout
+```
+
+Each scenario's `:tags` land as var metadata, so `--focus-meta :smoke` selects
+them, and its `:doc` becomes the var's docstring. The teardown fixture is
+registered for you.
+
+**A scenario added to `test/e2e` is a test on the next run.** Nothing here has to
+be edited to match — which is the point: a hand-written mirror `deftest` per
+scenario is a list that silently stops being true.
+
+Options, all read at macroexpansion:
+
+```clojure
+(defscenarios {:root     "/path/to/other-project" ; default: the JVM cwd
+               :tags     [:smoke]                 ; default: every scenario
+               :fixture? false})                  ; default: true
+```
+
+A selection matching nothing emits a single **failing** test rather than an empty
+namespace — a generated suite with nothing in it must not read green. A manifest
+that does not resolve, or two scenario ids that munge to one test name
+(`:a/b` and `:a-b`), throw at expansion.
+
+### The functions underneath
+
+`defscenarios` is a thin layer over `hive-cljs.test-api`, which is there when you
+want a hand-written test — an ad-hoc step vector, a scenario run under different
+conditions, an assertion the generated body does not make:
+
+```clojure
+(ns my.app.probe-test
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [hive-cljs.test-api :as cljs-e2e]))
 
-(def root "/abs/path/to/my-app")
+(def root (System/getProperty "user.dir"))
 
-(use-fixtures :once (fn [f] (f) (cljs-e2e/close! root)))
-
-(deftest login-works
-  (let [res (cljs-e2e/run-scenario! root :login)]
-    (is (cljs-e2e/passed? res) (cljs-e2e/explain res))))
+(use-fixtures :once (fn [f] (f) (cljs-e2e/close-all!)))
 
 (deftest ad-hoc-steps-need-no-manifest-entry
   (is (cljs-e2e/passed?
@@ -227,12 +267,10 @@ you which step broke and what it saw.
 
 **Close what you opened, or the JVM will not exit.** A session holds a relay
 connection; a live connection keeps the process alive after the last `deftest`
-returns, so CI hangs on a suite that was already green. `close!` releases one
-project — a suite that touches more than one wants the whole-suite teardown:
-
-```clojure
-(use-fixtures :once (fn [f] (f) (cljs-e2e/close-all!)))
-```
+returns, so CI hangs on a suite that was already green. `defscenarios` registers
+`close-all!` for you; a hand-written namespace does it itself — `close!` releases
+one project, `close-all!` every open one, which is what a suite touching more
+than one wants.
 
 A shutdown hook is *not* an alternative here: the JVM runs hooks only once it has
 decided to exit, and it decides that only when the last non-daemon thread ends.

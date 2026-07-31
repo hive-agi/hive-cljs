@@ -4,6 +4,7 @@ CPPB-stratified, three ports plus three optional capabilities. Dependencies poin
 down; effects live only at the boundary.
 
 ```
+SURFACE    test-api (fns) · test (defscenarios → clojure.test vars)
 BOUNDARY   addon/handlers · watch/supervisor · boundary   ← ports injected as arguments
 PIPELINE   plan     (scenario + manifest → run-plan)
            watch    (build event + policy → decisions)
@@ -114,8 +115,14 @@ Every test injects a stub through the ports — `StubBuildTool` (with
 suite runs with nothing installed:
 
 ```bash
-clojure -M:test    # 122 tests, 568 assertions
+clojure -M:test    # 181 tests, 727 assertions
 ```
+
+`defscenarios` is tested by expanding it against real temp project trees and
+inspecting the emitted forms — no browser, and the generated bodies are never
+invoked. The one exception is the empty-selection case, whose generated test is
+evaluated and run, because "a selection that matches nothing fails" is a claim
+about what the var *does*, not about its shape.
 
 The stubs also model the *absence* of the optional capabilities —
 `driver-without-marking` and `cljs-eval-without-affinity` — so the degradation

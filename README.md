@@ -117,13 +117,20 @@ knowledge of its internals.
 
 ## In a test suite
 
-```clojure
-(require '[hive-cljs.test-api :as cljs-e2e])
+Scenarios are tests, so they run as tests — one form generates the namespace:
 
-(deftest login-works
-  (let [res (cljs-e2e/run-scenario! project-root :login)]
-    (is (cljs-e2e/passed? res) (cljs-e2e/explain res))))
+```clojure
+(ns my.app.e2e-test
+  (:require [hive-cljs.test :refer [defscenarios]]))
+
+(defscenarios)
 ```
+
+One `deftest` per declared scenario, scenario `:tags` as var metadata for
+`--focus-meta`, root resolved by walking up from the working directory, teardown
+registered. A scenario added to `test/e2e` is a test on the next run, with
+nothing here to keep in sync. `hive-cljs.test-api` is the function surface
+underneath, for hand-written tests and ad-hoc step vectors.
 
 Same execution path as the tool and the watcher. See
 [setup.md](docs/setup.md#7-in-a-test-suite).
@@ -151,7 +158,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 169 tests, 693 assertions — stubs only, no vendors needed
+clojure -M:test    # 181 tests, 727 assertions — stubs only, no vendors needed
 ```
 
 ## License
