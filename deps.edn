@@ -38,7 +38,7 @@
   ;; that mounts this lib — the host would otherwise have to declare our vendor.
   ;; ~195M in ~/.m2 (driver-bundle ships node + the driver); nothing is
   ;; extracted or launched until a scenario opens a session.
-  com.microsoft.playwright/playwright {:mvn/version "1.55.0"}}
+  com.microsoft.playwright/playwright {:mvn/version "1.57.0"}}
 
  :aliases
  {;; Retained so `-M:browser` keeps working for anyone who scripted it.

@@ -8,7 +8,8 @@
             [hive-cljs.schema :as s]
             [hive-dsl.result :as r]
             [malli.core :as m]
-            [malli.error :as me]))
+            [malli.error :as me]
+            [hive-cljs.mutation :as mutation]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -58,7 +59,7 @@
   (boolean (seq (dissoc raw inherit-key))))
 
 (def default-shadow  {:host "localhost" :port 9630})
-(def default-e2e     {:browser :chromium :headless true :timeout-ms 15000})
+(def default-e2e     {:browser :chromium :headless true :timeout-ms 15000 :poll-ms 250})
 (def default-watch   {:on-build-success [] :on-build-failure [] :debounce-ms 500})
 (def default-artifacts-dir ".hive-cljs/artifacts")
 
@@ -110,8 +111,10 @@
            {:base-url      (infer-base-url raw builds)
             :artifacts-dir (or (:artifacts-dir raw)
                                (str (str/replace root #"/$" "") "/" default-artifacts-dir))
-            :scenarios     (mapv normalize-scenario (:scenarios raw))}
-           (select-keys raw [:browser :headless :timeout-ms :frame]))))
+            :scenarios     (mapv normalize-scenario (:scenarios raw))
+            :faults        (mutation/normalize-faults (:faults raw))}
+           (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
+                             :app-db-schema :app-db-check]))))
 
 (defn normalize-action
   "Coerce a watch action to the `[kind opts]` tuple shape."
@@ -154,6 +157,18 @@
     (r/err :manifest/invalid
            {:explain (me/humanize (m/explain s/Manifest manifest))})))
 
+(defn duplicate-scenario-ids
+  "Scenario ids declared more than once, sorted.
+
+   Scenarios may arrive from several files once `:scenario-paths` is in play,
+   so a collision is a config error rather than a last-one-wins merge."
+  [scenarios]
+  (->> (map :id scenarios)
+       frequencies
+       (keep (fn [[id n]] (when (< 1 n) id)))
+       sort
+       vec))
+
 (defn parse
   "Raw config + root → Result of a validated normalized manifest.
    `sources` records which files the config came from."
@@ -161,8 +176,12 @@
   ([raw root sources]
    (if-not (map? raw)
      (r/err :manifest/not-a-map {:got (type raw)})
-     (validate (cond-> (normalize raw root)
-                 (seq sources) (assoc :manifest/sources (vec sources)))))))
+     (let [m    (cond-> (normalize raw root)
+                  (seq sources) (assoc :manifest/sources (vec sources)))
+           dups (duplicate-scenario-ids (get-in m [:manifest/e2e :scenarios]))]
+       (if (seq dups)
+         (r/err :manifest/duplicate-scenario {:ids dups})
+         (validate m))))))
 
 ;; =============================================================================
 ;; Queries

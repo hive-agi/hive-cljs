@@ -157,6 +157,13 @@
                  " page to pin to and answers from whichever runtime the"
                  " toolchain picks")})
 
+(defn- stale-bundle-warning
+  [builds]
+  {:warning :bundle/stale
+   :detail  (str "the emitted output for " (pr-str builds) " is older than the"
+                 " sources it was built from — the page under test is a previous"
+                 " compile, so a green run proves nothing about the current code")})
+
 (defn doctor
   "Manifest + connectivity diagnosis for a project root."
   [root]
@@ -170,7 +177,10 @@
             reported (vec (reported-builds s))
             match    (staleness/server-match declared reported)
             rts      (runtimes s declared)
-            crowded  (crowded-builds rts)]
+            crowded  (crowded-builds rts)
+            bundles  (staleness/bundle-stamps
+                      (boundary/bundle-facts (:manifest/root m) declared))
+            stale-bs (staleness/stale-bundles bundles)]
         (r/ok {:manifest        :ok
                :root            (:manifest/root m)
                :invoked-from    (:root s)
@@ -179,8 +189,10 @@
                :builds          declared
                :served-builds   reported
                :server          match
+               :bundles         bundles
                :scenarios       (mapv :id (get-in m [:manifest/e2e :scenarios]))
                :base-url        (get-in m [:manifest/e2e :base-url])
+               :app-db-schema   (get-in m [:manifest/e2e :app-db-schema])
                :watch           (:manifest/watch m)
                :ports           (health s)
                :runtimes        rts
@@ -190,10 +202,14 @@
                                   (conj (wrong-server-warning shadow declared reported))
 
                                   (seq crowded)
-                                  (conj (ambiguous-runtime-warning crowded)))})))))
+                                  (conj (ambiguous-runtime-warning crowded))
+
+                                  (seq stale-bs)
+                                  (conj (stale-bundle-warning stale-bs)))})))))
 
 (defn staleness
-  "Freshness of the cached view for `root` — manifest-vs-disk and server match.
+  "Freshness of the cached view for `root` — three axes: manifest-vs-disk,
+   declared-vs-served builds, and emitted-bundle-vs-source.
 
    Reported against the view as it was BEFORE this call, so an edit is still
    visible in the report that refreshes it."
@@ -201,11 +217,15 @@
   (let [cached (get @sessions (str root))]
     (r/bind (session root)
             (fn [s]
-              (r/ok (staleness/report
-                     {:cached-sources  (:sources (or cached s))
-                      :current-sources (current-stamps s)
-                      :declared-builds (vec (keys (get-in s [:manifest :manifest/builds])))
-                      :reported-builds (vec (reported-builds s))}))))))
+              (let [declared (vec (keys (get-in s [:manifest :manifest/builds])))]
+                (r/ok (staleness/report
+                       {:cached-sources  (:sources (or cached s))
+                        :current-sources (current-stamps s)
+                        :declared-builds declared
+                        :reported-builds (vec (reported-builds s))
+                        :bundles         (boundary/bundle-facts
+                                          (get-in s [:manifest :manifest/root])
+                                          declared)})))))))
 
 (defn ensure-port
   "Return a Result of the named port from a session, or the recorded error."

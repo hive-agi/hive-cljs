@@ -94,11 +94,17 @@
    (browser-rule :expect-url 1)])
 
 (def runtime-rules
-  "Steps routed to ICljsEval instead of the browser."
+  "Steps routed to ICljsEval instead of the browser.
+
+   The `:wait-for-*` pair is the condition-wait counterpart of the DOM-level
+   `:wait-for`: same predicate strings as the matching `:expect-*`, polled
+   until the run's timeout instead of asserted once."
   [(runtime-rule :eval-cljs 1)
    (runtime-rule :dispatch 1)
    (runtime-rule :expect-sub 2)
-   (runtime-rule :expect-db 2)])
+   (runtime-rule :expect-db 2)
+   (runtime-rule :wait-for-sub 2)
+   (runtime-rule :wait-for-db 2)])
 
 (def artifact-rules
   [(browser-rule :screenshot 1)])

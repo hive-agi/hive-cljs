@@ -17,7 +17,7 @@
                    :doc "Validate hive-cljs config and report port connectivity"
                    :params []}
    "staleness"    {:fn h/staleness
-                   :doc "Report config-vs-disk freshness and whether the server serves our builds"
+                   :doc "Report config-vs-disk freshness, served builds, and bundle-vs-source age"
                    :params []}
    "status"       {:fn h/status
                    :doc "Build verdict for one build, or all known builds"
@@ -34,6 +34,12 @@
    "e2e run"      {:fn h/e2e-run
                    :doc "Run a scenario by :scenario, or every scenario matching :tags"
                    :params [:scenario :tags]}
+   "e2e run-all"  {:fn h/e2e-run-all
+                   :doc "Run :scenario/:tags in every descendant project that authors config"
+                   :params [:scenario :tags :depth]}
+   "e2e mutate"   {:fn h/e2e-mutate
+                   :doc "Mutation score: inject faults and report the ones no scenario killed"
+                   :params [:scenario :tags :auto]}
    "watch start"  {:fn h/watch-start
                    :doc "Couple build success to e2e runs per :hive.cljs/watch"
                    :params []}
@@ -144,7 +150,10 @@
      "build"     {:type "string" :description "shadow-cljs build id, e.g. 'app'"}
      "code"      {:type "string" :description "ClojureScript source for 'eval'"}
      "scenario"  {:type "string" :description "Scenario id for 'e2e run'"}
-     "tags"      {:type "string" :description "Comma-separated tags for 'e2e run'"}}
+     "tags"      {:type "string" :description "Comma-separated tags for 'e2e run'"}
+     "depth"     {:type "string" :description "Search depth for 'e2e run-all' (default 3)"}
+     "auto"      {:type "string"
+                  :description "Derive faults for 'e2e mutate': 'true', or 'sub,event'"}}
     :required ["command"]}
    :handler dispatch})
 

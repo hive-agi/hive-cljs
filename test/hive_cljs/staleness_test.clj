@@ -146,7 +146,7 @@
 
 (def report-keys
   #{:staleness/manifest :staleness/sources :staleness/server
-    :staleness/declared-builds :staleness/reported-builds})
+    :staleness/declared-builds :staleness/reported-builds :staleness/bundles})
 
 (deftest an-empty-report-is-fresh-and-unknown
   (let [rep (staleness/report {})]
@@ -156,7 +156,8 @@
             :staleness/sources         []
             :staleness/server          :unknown
             :staleness/declared-builds []
-            :staleness/reported-builds []}
+            :staleness/reported-builds []
+            :staleness/bundles         []}
            rep))))
 
 (deftest a-populated-report-derives-each-value-from-its-own-input

@@ -47,6 +47,10 @@
 (def BrowserEngine
   [:enum :chromium :firefox :webkit])
 
+(def AppDbCheck
+  "How often the app-db invariant is asserted during a run."
+  [:enum :every-step :mutations :final])
+
 ;; =============================================================================
 ;; Build status
 ;; =============================================================================
@@ -111,6 +115,34 @@
    [:steps [:vector {:min 1} Step]]])
 
 ;; =============================================================================
+;; Mutation — injected behavioural faults
+;; =============================================================================
+
+(def Fault
+  "One behavioural fault: source the runtime evaluates to break the live app."
+  [:map {:closed true}
+   [:fault/id :keyword]
+   [:fault/form NonBlankString]
+   [:fault/target {:optional true} :symbol]
+   [:fault/doc {:optional true} :string]])
+
+(def FaultVerdict
+  "Whether the suite noticed one fault. Killed is the GOOD outcome."
+  [:map {:closed true}
+   [:fault/id :keyword]
+   [:fault/killed? :boolean]
+   [:fault/by {:optional true} [:vector ScenarioId]]
+   [:fault/detail {:optional true} :string]])
+
+(def MutationReport
+  [:map {:closed true}
+   [:mutation/scenarios [:vector ScenarioId]]
+   [:mutation/verdicts [:vector FaultVerdict]]
+   [:mutation/killed [:vector :keyword]]
+   [:mutation/survived [:vector :keyword]]
+   [:mutation/score [:double {:min 0.0 :max 1.0}]]])
+
+;; =============================================================================
 ;; Manifest — normalized
 ;; =============================================================================
 
@@ -126,7 +158,11 @@
    [:browser BrowserEngine]
    [:headless :boolean]
    [:timeout-ms Millis]
+   [:poll-ms Millis]
    [:frame {:optional true} :keyword]
+   [:app-db-schema {:optional true} :symbol]
+   [:app-db-check {:optional true} AppDbCheck]
+   [:faults [:vector Fault]]
    [:artifacts-dir NonBlankString]
    [:scenarios [:vector Scenario]]])
 
@@ -178,13 +214,27 @@
   "Whether the connected toolchain is serving the builds the manifest declares."
   [:enum :ok :mismatch :unknown])
 
+(def BundleFreshness
+  "Whether a build's emitted output is newer than the sources it was built from."
+  [:enum :fresh :stale :unknown])
+
+(def BundleStamp
+  "One build's compiled-output-vs-source comparison."
+  [:map {:closed true}
+   [:bundle/build BuildId]
+   [:bundle/state BundleFreshness]
+   [:bundle/output-dir {:optional true} NonBlankString]
+   [:bundle/compiled Millis]
+   [:bundle/newest-source Millis]])
+
 (def StalenessReport
   [:map {:closed true}
    [:staleness/manifest ManifestFreshness]
    [:staleness/sources [:vector SourceStamp]]
    [:staleness/server ServerMatch]
    [:staleness/declared-builds [:vector BuildId]]
-   [:staleness/reported-builds [:vector BuildId]]])
+   [:staleness/reported-builds [:vector BuildId]]
+   [:staleness/bundles [:vector BundleStamp]]])
 
 ;; =============================================================================
 ;; Run plan and report
@@ -197,6 +247,7 @@
    [:plan/build {:optional true} BuildId]
    [:plan/base-url NonBlankString]
    [:plan/session [:map-of :keyword :any]]
+   [:plan/runtime [:map-of :keyword :any]]
    [:plan/ops [:vector {:min 1} Op]]])
 
 (def StepState

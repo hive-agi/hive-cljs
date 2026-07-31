@@ -121,16 +121,23 @@ unset, and any runtime step returns a typed error telling you to set `:build`.
 ### `:hive.cljs/e2e` — browser and scenarios
 
 ```clojure
-{:base-url      "http://localhost:8280"   ; inferred from a build's :http-port
- :browser       :chromium                 ; :chromium | :firefox | :webkit
- :headless      true
- :timeout-ms    15000
- :artifacts-dir "<root>/.hive-cljs/artifacts"
- :scenarios     [{:id    :login           ; required
-                  :build :app             ; optional — inherited if unambiguous
-                  :tags  [:smoke]         ; optional — selects for `e2e run` / watch
-                  :doc   "…"              ; optional
-                  :steps [[:goto "/"] …]}]}
+{:base-url       "http://localhost:8280"  ; inferred from a build's :http-port
+ :browser        :chromium                ; :chromium | :firefox | :webkit
+ :headless       true
+ :timeout-ms     15000
+ :poll-ms        250                      ; condition-wait poll interval
+ :artifacts-dir  "<root>/.hive-cljs/artifacts"
+ :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
+ :app-db-schema  my.app.schema/app-db     ; optional — asserted between steps
+ :app-db-check   :every-step              ; :every-step | :mutations | :final
+ :faults         [{:id     :status-hole   ; optional — the mutation catalog
+                   :target my.app.view-model/derive-status
+                   :with   "(constantly nil)"}]
+ :scenarios      [{:id    :login          ; required
+                   :build :app            ; optional — inherited if unambiguous
+                   :tags  [:smoke]        ; optional — selects for `e2e run` / watch
+                   :doc   "…"             ; optional
+                   :steps [[:goto "/"] …]}]}
 ```
 
 Relative `:goto` URLs resolve against `:base-url`; absolute ones pass through.
@@ -138,6 +145,38 @@ Screenshots land in `:artifacts-dir` and are listed in the run report's
 `:run/artifacts`.
 
 Step vocabulary: [steps.md](steps.md).
+
+#### `:scenario-paths` — scenarios live with the rest of the suite
+
+Scenarios are config, but they *are* tests, so they belong next to the other
+tests rather than in the project root. Each path names a directory (every `*.edn`
+below it, in sorted order) or a single file:
+
+```
+my-app/hive-cljs.edn          ← connectivity only: :shadow, :builds, :e2e defaults
+my-app/test/e2e/smoke.edn     ← [{:id :home  :steps […]} …]
+my-app/test/e2e/billing.edn   ← one file per feature area
+```
+
+A scenario file is a vector of scenario maps, a single scenario map, or a map
+with `:scenarios`. `:scenarios` and `:scenario-paths` compose — inline first,
+then the files. A **duplicate `:id` is a config error** (`:manifest/duplicate-scenario`),
+never a last-one-wins merge.
+
+Every scenario file joins `:manifest/sources`, so editing one invalidates the
+cached session exactly like editing the manifest: the loop is edit → run.
+
+#### `:app-db-schema` — one schema, asserted between steps
+
+Turns every scenario into a state-corruption detector on top of its own
+assertions. See [steps.md](steps.md#the-app-db-invariant-channel).
+
+#### `:faults` — the mutation catalog
+
+Each entry is `{:id :target :with}` (replace a var) or `{:id :form "…"}`
+(evaluate arbitrary source). `cljs e2e mutate` injects each one and reports the
+ones no scenario turned red. `:auto` derives a catalog from the app's own
+re-frame registries with no config at all.
 
 ### `:hive.cljs/watch` — build → e2e coupling
 
@@ -165,7 +204,11 @@ nothing ran.
 | `shadow :nrepl-port` | none — runtime channel disabled |
 | `e2e :base-url` | `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |
 | `e2e :browser` / `:headless` / `:timeout-ms` | `:chromium` / `true` / `15000` |
+| `e2e :poll-ms` | `250` |
 | `e2e :artifacts-dir` | `<root>/.hive-cljs/artifacts` |
+| `e2e :scenario-paths` / `:faults` | none / `[]` |
+| `e2e :app-db-schema` | none — no invariant asserted |
+| `e2e :app-db-check` | `:every-step` (only consulted with a schema) |
 | `watch :debounce-ms` | `500` |
 | `watch :on-build-success` / `:on-build-failure` | `[]` / `[]` |
 | `watch :builds` | all builds |
@@ -197,13 +240,23 @@ code {command: "cljs staleness", directory: "/path/to/my-app"}
                               :source/modified 1753… :source/size 412} …]
  :staleness/server          :mismatch
  :staleness/declared-builds [:app]
- :staleness/reported-builds [:other-app]}
+ :staleness/reported-builds [:other-app]
+ :staleness/bundles         [{:bundle/build :app :bundle/state :stale
+                              :bundle/output-dir "public/js"
+                              :bundle/compiled 1753… :bundle/newest-source 1754…}]}
 ```
 
 | Key | Reads |
 |---|---|
 | `:staleness/manifest` | `:stale` when a contributing file changed on disk since the session opened |
 | `:staleness/server` | `:ok` when the connected server serves a build we declare, `:mismatch` when the sets are disjoint, `:unknown` when either side is empty |
+| `:staleness/bundles` | per build: `:stale` when the emitted output is older than the sources it was built from, `:unknown` when either timestamp is missing |
+
+The bundle axis is the one that reads a green run and calls it worthless: a suite
+passing against a *previous* compile proves nothing about the code on disk. The
+timestamps come from `shadow-cljs.edn` — `:source-paths` against the build's
+`:output-dir` / `:output-to` — so no toolchain support is needed and a project
+without a shadow config simply reports nothing rather than guessing.
 
 `:mismatch` is the port-drift trap from [setup.md](setup.md) step 3 made visible:
 you are talking to *another project's* shadow server, and every verdict it gives

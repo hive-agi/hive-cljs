@@ -8,7 +8,8 @@
             [hive-cljs.system :as system]
             [hive-cljs.verdict :as verdict]
             [hive-cljs.watch.supervisor :as supervisor]
-            [hive-dsl.result :as r]))
+            [hive-dsl.result :as r]
+            [hive-cljs.plan :as plan]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -34,6 +35,15 @@
     (coll? x)    (set (keep ->keyword x))
     (string? x)  (set (keep ->keyword (str/split x #"[,\s]+")))
     :else        #{}))
+
+(defn ->fault-kinds
+  "Which re-frame registries to derive a fault catalog from.
+   `true` means both; a tag list narrows it."
+  [x]
+  (cond
+    (nil? x)                            []
+    (or (true? x) (= "true" (str x)))   [:sub :event]
+    :else                               (vec (keep #{:sub :event} (->tags x)))))
 
 (defn root-of
   [{:keys [directory root]}]
@@ -122,6 +132,53 @@
                   (fn [reps] (r/ok {:summary (mapv verdict/summarize reps)
                                     :reports reps})))
           :else (r/err :params/missing {:param :scenario :alt :tags}))))))
+
+(defn e2e-run-all
+  "Fan out a run across every descendant project that authors hive-cljs config.
+
+   Opt-in, because `e2e run` from a workspace root deliberately refuses to guess
+   which project was meant. Every candidate is reported, failures included — a
+   dropped project reads as a project with nothing to run."
+  [params]
+  (let [root  (root-of params)
+        depth (or (some-> (:depth params) str parse-long) 3)
+        roots (boundary/descendant-candidates root depth)]
+    (if (empty? roots)
+      (r/err :workspace/no-candidates
+             {:root root
+              :hint "no directory below this root authors hive-cljs.edn or :hive.cljs config"})
+      (r/ok {:root     root
+             :projects (mapv (fn [d]
+                               (let [res (e2e-run (assoc params :directory d :root d))]
+                                 (if (r/ok? res)
+                                   {:project d :ok true :summary (:summary (:ok res))}
+                                   {:project d :ok false :error res})))
+                             roots)}))))
+
+(defn e2e-mutate
+  "Score the suite against a fault catalog: declared `:faults`, plus the
+   handlers `:auto` derives from the running app.
+
+   Inverted verdict — a fault the suite does not turn red is a hole in the
+   suite, not a passing test."
+  [params]
+  (with-session
+    params
+    (fn [s]
+      (let [m        (:manifest s)
+            deps     (system/run-deps s)
+            id       (->keyword (:scenario params))
+            kinds    (->fault-kinds (:auto params))
+            declared (vec (get-in m [:manifest/e2e :faults]))]
+        (r/bind
+         (if id
+           (r/bind (plan/plan-for-id m id) (fn [p] (r/ok [p])))
+           (plan/plans-for-tags m (->tags (:tags params))))
+         (fn [plans]
+           (r/bind
+            (boundary/derive-faults! deps (first plans) kinds)
+            (fn [auto]
+              (boundary/run-mutations! deps plans (into declared auto))))))))))
 
 (defn watch-start
   [params]

@@ -41,6 +41,18 @@
      :timeout-ms (:timeout-ms e2e)
      :artifacts-dir (:artifacts-dir e2e)}))
 
+(defn runtime-opts
+  "Runtime-channel options for a run — what the boundary needs that the browser
+   session does not: how long to poll a condition-wait, and which app-db
+   invariant to assert between steps."
+  [manifest frame]
+  (let [e2e (:manifest/e2e manifest)]
+    (cond-> {:timeout-ms (:timeout-ms e2e)
+             :poll-ms    (:poll-ms e2e)}
+      frame                 (assoc :frame frame)
+      (:app-db-schema e2e)  (assoc :app-db-schema (:app-db-schema e2e))
+      (:app-db-check e2e)   (assoc :app-db-check (:app-db-check e2e)))))
+
 (defn default-build
   "Build a scenario runs against when it names none: the project's sole build,
    or nil when the choice is ambiguous."
@@ -65,6 +77,7 @@
        (r/ok (cond-> {:plan/scenario (:id scenario)
                       :plan/base-url base-url
                       :plan/session  (session-opts manifest)
+                      :plan/runtime  (runtime-opts manifest frame)
                       :plan/ops      (cond->> (resolve-urls base-url (:ok compiled))
                                        frame (mapv #(if (= :runtime (:op/channel %))
                                                       (assoc % :op/frame frame)

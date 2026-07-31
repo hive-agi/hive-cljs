@@ -5,10 +5,12 @@ down; effects live only at the boundary.
 
 ```
 BOUNDARY   addon/handlers · watch/supervisor · boundary   ← ports injected as arguments
-PIPELINE   plan   (scenario + manifest → run-plan)
-           watch  (build event + policy → decisions)
-PROMOTE    verdict (raw payload → verdict / report)
-           step    (authored datum → op, OCP rule chain)
+PIPELINE   plan     (scenario + manifest → run-plan)
+           watch    (build event + policy → decisions)
+           mutation (fault + run-plan → mutated plan; reports → score)
+PROMOTE    verdict   (raw payload → verdict / report)
+           step      (authored datum → op, OCP rule chain)
+           staleness (cached state + world → is the view still true)
 COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 

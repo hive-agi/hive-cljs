@@ -49,17 +49,60 @@
   (= :mismatch (server-match declared reported)))
 
 ;; =============================================================================
+;; Emitted bundle vs the sources it was built from
+;; =============================================================================
+
+(defn bundle-freshness
+  "Compare a build's newest emitted output with the newest source under it.
+
+   `:unknown` when either side is missing — an absent output directory and an
+   up-to-the-second bundle are not the same claim, and only one of them is
+   worth reporting."
+  [compiled newest-source]
+  (if (or (nil? compiled) (nil? newest-source)
+          (zero? compiled) (zero? newest-source))
+    :unknown
+    (if (< compiled newest-source) :stale :fresh)))
+
+(defn bundle-stamp
+  "Build id + filesystem facts → `schema/BundleStamp`."
+  [build-id {:keys [output-dir compiled newest-source]}]
+  (cond-> {:bundle/build         build-id
+           :bundle/state         (bundle-freshness compiled newest-source)
+           :bundle/compiled      (or compiled 0)
+           :bundle/newest-source (or newest-source 0)}
+    output-dir (assoc :bundle/output-dir (str output-dir))))
+
+(defn bundle-stamps
+  "Facts keyed by build id → a stamp vector, sorted by build id."
+  [facts]
+  (mapv (fn [[bid f]] (bundle-stamp bid f)) (sort-by key (or facts {}))))
+
+(defn stale-bundles
+  "Build ids whose emitted output predates their own sources."
+  [stamps]
+  (->> stamps (filter #(= :stale (:bundle/state %))) (mapv :bundle/build)))
+
+;; =============================================================================
 ;; Report
 ;; =============================================================================
 
 (defn report
-  "Cached + current stamps and declared + reported builds → `schema/StalenessReport`."
-  [{:keys [cached-sources current-sources declared-builds reported-builds]}]
+  "Cached + current stamps, declared + reported builds and per-build bundle
+   facts → `schema/StalenessReport`."
+  [{:keys [cached-sources current-sources declared-builds reported-builds bundles]}]
   {:staleness/manifest        (freshness cached-sources current-sources)
    :staleness/sources         (vec current-sources)
    :staleness/server          (server-match declared-builds reported-builds)
    :staleness/declared-builds (vec declared-builds)
-   :staleness/reported-builds (vec reported-builds)})
+   :staleness/reported-builds (vec reported-builds)
+   :staleness/bundles         (bundle-stamps bundles)})
+
+(m/=> bundle-freshness
+      [:=> [:cat [:maybe s/Millis] [:maybe s/Millis]] s/BundleFreshness])
+(m/=> bundle-stamp [:=> [:cat s/BuildId [:map-of :keyword :any]] s/BundleStamp])
+(m/=> bundle-stamps [:=> [:cat [:maybe [:map-of s/BuildId :any]]] [:vector s/BundleStamp]])
+(m/=> stale-bundles [:=> [:cat [:sequential s/BundleStamp]] [:vector s/BuildId]])
 
 ;; =============================================================================
 ;; Contracts

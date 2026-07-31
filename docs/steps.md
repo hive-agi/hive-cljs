@@ -70,6 +70,8 @@ build).
 | `[:dispatch [:login "pedro"]]` | `(re-frame.core/dispatch-sync [:login "pedro"])` |
 | `[:expect-sub [:current-user] "some?"]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
 | `[:expect-db [:user :name] "some?"]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
+| `[:wait-for-sub [:selected] "some?"]` | the same, polled until it holds |
+| `[:wait-for-db [:items] "seq"]` | the same, polled until it holds |
 
 The predicate is source text, so any expression works:
 `"#(= % \"pedro\")"`, `"string?"`, `"#(> (count %) 3)"`.
@@ -77,6 +79,52 @@ The predicate is source text, so any expression works:
 `:expect-sub` and `:expect-db` are **assertions** — a `false` or `nil` result
 fails the step. `:eval-cljs` and `:dispatch` are **actions** — they pass unless
 evaluation errors.
+
+### Condition-waits on state
+
+`:wait-for` waits on the DOM; `:wait-for-sub` and `:wait-for-db` wait on what the
+app *believes*. They take the same predicate strings as the matching `:expect-*`,
+poll every `:poll-ms` (default 250) until `:timeout-ms`, and pass the moment the
+predicate holds.
+
+Reach for one whenever an assertion follows an async mutation:
+
+```clojure
+[:click "#save"]
+[:wait-for-sub [:selected] "some?"]        ; not [:wait-ms 2500]
+[:expect-sub [:selected] "#(= \"active\" (:status %))"]
+```
+
+A fixed pause is a guess about a machine you are not running on: it passes warm
+and fails cold. A condition-wait is a claim about the state you care about, and
+its timeout failure reports the **last observed value** — enough to tell "never
+happened" from "not yet":
+
+```
+condition never held within 15000ms — last value {:status "pending"}
+```
+
+Waiting on a DOM element as a proxy for state only works when a suitable element
+happens to exist. These need none.
+
+## The app-db invariant channel
+
+Declare a malli schema for the whole app-db and every scenario becomes a
+state-corruption detector on top of its own assertions:
+
+```clojure
+:hive.cljs/e2e {:app-db-schema inventory.frontend.schema/app-db
+                :app-db-check  :every-step}   ; :mutations | :final
+```
+
+After each passing step, hive-cljs evaluates `(malli.core/explain schema @app-db)`
+in the runtime; any explanation fails that step with the offending paths in
+`:step/detail`. The app build must carry both the schema's namespace and malli.
+
+`:every-step` (default) checks after every step, `:mutations` skips the steps that
+only observe, `:final` checks once at the end. A step that already failed is not
+re-blamed on the invariant, and an invariant that cannot be evaluated is reported
+as an `:error` — an invariant that did not run is not an invariant that held.
 
 ## Semantics
 

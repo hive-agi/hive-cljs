@@ -90,15 +90,30 @@ input vocabulary and the watcher, in one small app.
 | Subcommand | Does |
 |---|---|
 | `cljs doctor` | validate config, report per-port connectivity and which runtimes are attached |
-| `cljs staleness` | is the cached config still current, and does the server serve our builds |
+| `cljs staleness` | three axes: cached config vs disk, declared vs served builds, emitted bundle vs source |
 | `cljs status [build]` | build verdict — one build or all |
 | `cljs compile <build>` | one compile cycle, returns the verdict |
 | `cljs eval <build> <code>` | evaluate cljs in the running runtime |
 | `cljs e2e list \| run` | run a scenario (`scenario`) or a tag set (`tags`) |
+| `cljs e2e run-all` | fan the same run out over every descendant project that authors config |
+| `cljs e2e mutate` | inject faults and report the ones no scenario killed |
 | `cljs watch start \| stop \| status` | couple build success to e2e runs |
 | `cljs help` | subcommand index |
 
 All accept `directory` (project root; defaults to cwd).
+
+## Three ways a suite can lie, and what answers each
+
+| The lie | The answer |
+|---|---|
+| a fixed `[:wait-ms 2500]` that passes warm and fails cold | `[:wait-for-sub [:selected] "some?"]` — poll the state, and report the last value seen on timeout |
+| every assertion green while app-db quietly rots around them | `:app-db-schema` — a malli schema asserted between steps, so a scenario also proves the state stayed well-formed |
+| a green suite that no bug can turn red | `cljs e2e mutate` — break the live app on purpose; a fault nothing kills is a hole in the suite |
+
+The last one is the JVM trifecta's missing half: `hive-schemas.test` mutates
+*values* against schemas, this mutates *behaviour* against scenarios. `:auto`
+derives the catalog from the app's own re-frame registries — no config, no
+knowledge of its internals.
 
 ## In a test suite
 
@@ -136,7 +151,7 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 ## Testing
 
 ```bash
-clojure -M:test    # 122 tests, 568 assertions — stubs only, no vendors needed
+clojure -M:test    # 169 tests, 693 assertions — stubs only, no vendors needed
 ```
 
 ## License
