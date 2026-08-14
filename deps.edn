@@ -7,10 +7,10 @@
   io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
   ;; hive-dsl — Result monad, ADTs, error taxonomy
-  io.github.hive-agi/hive-dsl   {:mvn/version "0.5.9"}
+  io.github.hive-agi/hive-dsl   {:mvn/version "0.5.10"}
 
   ;; hive-di — defconfig: typed env/literal sources, Result-returning resolution
-  io.github.hive-agi/hive-di    {:mvn/version "0.3.2"}
+  io.github.hive-agi/hive-di    {:mvn/version "0.4.1"}
 
   ;; hive-schemas — malli value objects + schema-synthesized test facets
   io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}
@@ -38,7 +38,8 @@
   ;; that mounts this lib — the host would otherwise have to declare our vendor.
   ;; ~195M in ~/.m2 (driver-bundle ships node + the driver); nothing is
   ;; extracted or launched until a scenario opens a session.
-  com.microsoft.playwright/playwright {:mvn/version "1.57.0"}}
+  com.microsoft.playwright/playwright {:mvn/version "1.57.0"}
+  org.clojure/data.json {:mvn/version "2.5.1"}}
 
  :aliases
  {;; Retained so `-M:browser` keeps working for anyone who scripted it.
@@ -48,7 +49,7 @@
   :test
   {:extra-paths ["test"]
    :extra-deps {lambdaisland/kaocha          {:mvn/version "1.91.1392"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.10"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}
                 org.clojure/test.check       {:mvn/version "1.1.1"}}
    :main-opts ["-m" "kaocha.runner"]}
 

@@ -217,6 +217,42 @@ The watcher always produces a decision, including `:ignore` with a reason
 `"no :on-build-success actions configured"`), so `cljs watch status` explains why
 nothing ran.
 
+### `:hive.cljs/coverage` — how much of your own ClojureScript the suite reaches
+
+```clojure
+{:build           :unit-node          ; a shadow build with a :node-test target
+ :source-prefixes ["payment-flow"]    ; NAMESPACE patterns, not file paths
+ :exclude         ["*-test" "payment-flow.dev.*"]
+ :report-dir      "target/coverage"
+ :baseline        "target/coverage/baseline.json"   ; optional — enables the delta
+ :thresholds      {:lines 80}}                      ; optional — gates the verdict
+```
+
+`cljs coverage` compiles the build, runs the bundle under the configured
+coverage provider, and reports **per ClojureScript namespace**, worst-covered
+first. `cljs coverage baseline` freezes the current numbers so the next run
+carries a delta.
+
+You write **namespace patterns**; hive-cljs translates them into the compiled
+module globs the provider actually filters on. That translation is the whole
+point of the section: shadow-cljs emits one flat directory of dotted module
+names (`payment_flow.views.editar.js`), so a path-shaped glob written by hand
+matches nothing and the tool reports `0/0` instead of failing. The emitted
+layout is profile data (`:coverage/compiled-layout`), so a toolchain that
+writes nested directories is a `profile/register!`, not a code change.
+
+A delta is reported in **covered counts, never percentages**. A V8-based
+provider only enumerates branch ranges inside functions it actually executed,
+so new tests enlarge the denominator and a percentage can fall while coverage
+genuinely rose. `:regressions` lists namespaces that lost covered counts.
+
+Other keys: `:profile` picks the coverage provider (default `:coverage/c8`),
+`:bundle` overrides the measured artifact (default `target/<build>.js`),
+`:runner` overrides how it is executed (default `["node"]`), and `:compile
+false` measures a bundle already on disk instead of building one.
+
+A run that measured nothing is `:unavailable`, never a pass.
+
 ## Defaults, in one place
 
 | Key | Default |
@@ -233,6 +269,14 @@ nothing ran.
 | `watch :debounce-ms` | `500` |
 | `watch :on-build-success` / `:on-build-failure` | `[]` / `[]` |
 | `watch :builds` | all builds |
+| `coverage :build` | `:unit-node` |
+| `coverage :profile` | `:coverage/c8` |
+| `coverage :bundle` | `target/<build>.js` |
+| `coverage :compile` | `npx shadow-cljs compile <build>` (`false` to skip) |
+| `coverage :runner` | `["node"]` |
+| `coverage :exclude` | `["*-test"]` |
+| `coverage :report-dir` | `target/coverage` |
+| `coverage :baseline` / `:thresholds` | none — no delta / no gate |
 
 ## Validation
 

@@ -12,7 +12,10 @@
             [hive-cljs.shadow.nrepl :as nrepl-forms]
             [hive-cljs.verdict :as verdict]
             [hive-dsl.result :as r]
-            [hive-cljs.mutation :as mutation])
+            [hive-cljs.mutation :as mutation]
+            [clojure.data.json :as json]
+            [hive-cljs.coverage :as coverage]
+            [clojure.walk :as walk])
   (:import [java.io PushbackReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -614,3 +617,110 @@
                        (mutation/verdict
                         f (run-plans! deps (mapv #(mutation/inject % f) plans))))
                      faults)))))))
+
+;; =============================================================================
+;; Coverage
+;; =============================================================================
+
+(defn exec-argv!
+  "Run `argv` with `cwd`. Result of {:exit :out :err}.
+
+   A non-zero exit is DATA, not an error: a coverage tool exits non-zero when
+   the suite fails, and that run still wrote a summary worth reading."
+  [argv cwd]
+  (try
+    (let [pb   (doto (ProcessBuilder. ^java.util.List (vec argv))
+                 (.directory (io/file cwd)))
+          proc (.start pb)
+          out  (slurp (.getInputStream proc))
+          err  (slurp (.getErrorStream proc))
+          exit (.waitFor proc)]
+      (r/ok {:exit exit :out out :err err}))
+    (catch Exception e
+      (r/err :coverage/exec-failed
+             {:argv (vec argv) :cwd cwd :cause (.getMessage e)}))))
+
+(defn read-json-file
+  "Parse an istanbul summary file. Outer keys stay STRINGS — they are filesystem
+   paths, and `keyword` would split one on its last slash into a namespace.
+   Returns nil when the file is absent."
+  [path]
+  (let [f (io/file path)]
+    (when (.exists f)
+      (with-open [rdr (io/reader f)]
+        (update-vals (json/read rdr) walk/keywordize-keys)))))
+
+(defn- tail
+  [s]
+  (let [s (str s)]
+    (if (<= (count s) 2000) s (subs s (- (count s) 2000)))))
+
+(defn- resolve-path [root rel]
+  (if (str/starts-with? (str rel) "/")
+    (str rel)
+    (str (str/replace root #"/$" "") "/" rel)))
+
+(defn run-coverage!
+  "Execute the coverage plan for `m` and build the report.
+
+   Effects arrive as arguments so the orchestration is testable without a
+   process or a filesystem: {:exec! (fn [argv cwd]) :read-json (fn [path])}."
+  ([m] (run-coverage! m {}))
+  ([m {:keys [exec! read-json]
+       :or   {exec! exec-argv! read-json read-json-file}}]
+   (if-let [cfg (manifest/coverage m)]
+     (let [root (:manifest/root m)
+           p    (coverage/plan cfg root)]
+       (r/bind
+        (if (seq (:plan/compile-argv p))
+          (exec! (:plan/compile-argv p) root)
+          (r/ok {:exit 0 :out "" :err "" :skipped true}))
+        (fn [compiled]
+          (if-not (zero? (:exit compiled))
+            (r/err :coverage/compile-failed
+                   {:argv (:plan/compile-argv p)
+                    :exit (:exit compiled)
+                    :err  (tail (:err compiled))})
+            (r/bind
+             (exec! (:plan/argv p) root)
+             (fn [ran]
+               (if-let [summary (read-json (resolve-path root (:plan/summary-path p)))]
+                 (let [baseline (some->> (:coverage/baseline cfg)
+                                         (resolve-path root)
+                                         read-json)]
+                   (r/ok {:report  (coverage/report cfg summary baseline)
+                          :process {:exit  (:exit ran)
+                                    :tests (if (zero? (:exit ran)) :pass :fail)}}))
+                 (r/err :coverage/no-summary
+                        {:expected (:plan/summary-path p)
+                         :exit     (:exit ran)
+                         :err      (tail (:err ran))
+                         :hint     (str "no machine-readable summary was written — check that the "
+                                        "profile's summary reporter is enabled and that its include "
+                                        "globs match the emitted module names")}))))))))
+     (r/err :coverage/not-configured
+            {:root (:manifest/root m)
+             :hint "add a :hive.cljs/coverage section declaring :source-prefixes"}))))
+
+(defn save-baseline!
+  "Copy the current summary to the configured baseline path, so the next run
+   reports a delta against this one."
+  ([m] (save-baseline! m {}))
+  ([m {:keys [read-json write-json]
+       :or   {read-json read-json-file
+              write-json (fn [path data]
+                           (io/make-parents (io/file path))
+                           (spit path (json/write-str data)))}}]
+   (if-let [cfg (manifest/coverage m)]
+     (if-let [dest (:coverage/baseline cfg)]
+       (let [root (:manifest/root m)
+             p    (coverage/plan cfg root)
+             src  (resolve-path root (:plan/summary-path p))]
+         (if-let [summary (read-json src)]
+           (do (write-json (resolve-path root dest) summary)
+               (r/ok {:baseline dest :from (:plan/summary-path p)
+                      :namespaces (count (coverage/rows summary))}))
+           (r/err :coverage/no-summary {:expected (:plan/summary-path p)})))
+       (r/err :coverage/no-baseline-configured
+              {:hint "set :baseline in the :hive.cljs/coverage section"}))
+     (r/err :coverage/not-configured {:root (:manifest/root m)}))))

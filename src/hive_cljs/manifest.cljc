@@ -134,6 +134,43 @@
                    (select-keys raw [:debounce-ms]))
       (seq (:builds raw)) (assoc :builds (set (:builds raw))))))
 
+(def default-coverage
+  {:profile     :coverage/c8
+   :runner      ["node"]
+   :report-dir  "target/coverage"
+   :exclude     ["*-test"]
+   :thresholds  {}})
+
+(defn normalize-thresholds
+  "Author-written percentages (ints are natural) → the schema's doubles."
+  [raw]
+  (into {} (map (fn [[k v]] [k (double v)])) (or raw {})))
+
+(defn normalize-coverage
+  "Resolve the coverage section. Returns nil when the project authors none —
+   coverage is opt-in, and an absent section must not fabricate a build id.
+
+   Paths stay relative: the boundary runs the plan with the project root as cwd.
+   `:compile false` (or an empty vector) measures the bundle already on disk."
+  [raw]
+  (when (map? raw)
+    (let [build   (or (:build raw) :unit-node)
+          compile (:compile raw)]
+      (cond-> {:coverage/build           build
+               :coverage/bundle          (or (:bundle raw)
+                                             (str "target/" (name build) ".js"))
+               :coverage/profile         (or (:profile raw) (:profile default-coverage))
+               :coverage/compile         (cond
+                                           (false? compile) []
+                                           (seq compile)    (vec compile)
+                                           :else ["npx" "shadow-cljs" "compile" (name build)])
+               :coverage/source-prefixes (vec (or (:source-prefixes raw) []))
+               :coverage/exclude         (vec (or (:exclude raw) (:exclude default-coverage)))
+               :coverage/report-dir      (or (:report-dir raw) (:report-dir default-coverage))
+               :coverage/thresholds      (normalize-thresholds (:thresholds raw))
+               :coverage/runner          (vec (or (:runner raw) (:runner default-coverage)))}
+        (:baseline raw) (assoc :coverage/baseline (:baseline raw))))))
+
 ;; =============================================================================
 ;; Pipeline
 ;; =============================================================================
@@ -141,12 +178,14 @@
 (defn normalize
   "Raw `hive-cljs.edn` map + project root → normalized manifest map."
   [raw root]
-  (let [builds (normalize-builds (:hive.cljs/builds raw))]
-    {:manifest/root   root
-     :manifest/shadow (normalize-shadow (:hive.cljs/shadow raw))
-     :manifest/builds builds
-     :manifest/e2e    (normalize-e2e (:hive.cljs/e2e raw) builds root)
-     :manifest/watch  (normalize-watch (:hive.cljs/watch raw))}))
+  (let [builds   (normalize-builds (:hive.cljs/builds raw))
+        coverage (normalize-coverage (:hive.cljs/coverage raw))]
+    (cond-> {:manifest/root   root
+             :manifest/shadow (normalize-shadow (:hive.cljs/shadow raw))
+             :manifest/builds builds
+             :manifest/e2e    (normalize-e2e (:hive.cljs/e2e raw) builds root)
+             :manifest/watch  (normalize-watch (:hive.cljs/watch raw))}
+      coverage (assoc :manifest/coverage coverage))))
 
 (defn validate
   "Result of a normalized manifest, or an :manifest/invalid error with
@@ -209,6 +248,15 @@
 (defn build-ids
   [manifest]
   (vec (keys (:manifest/builds manifest))))
+
+(defn coverage
+  "Normalized coverage config, or nil when the project authors none."
+  [manifest]
+  (:manifest/coverage manifest))
+
+(m/=> normalize-coverage [:=> [:cat :any] [:maybe s/CoverageConfig]])
+(m/=> normalize-thresholds [:=> [:cat :any] s/CoverageThresholds])
+(m/=> coverage [:=> [:cat s/Manifest] [:maybe s/CoverageConfig]])
 
 ;; =============================================================================
 ;; Contracts

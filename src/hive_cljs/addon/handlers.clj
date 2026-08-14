@@ -9,7 +9,8 @@
             [hive-cljs.verdict :as verdict]
             [hive-cljs.watch.supervisor :as supervisor]
             [hive-dsl.result :as r]
-            [hive-cljs.plan :as plan]))
+            [hive-cljs.plan :as plan]
+            [hive-cljs.coverage :as cov]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -179,6 +180,33 @@
             (boundary/derive-faults! deps (first plans) kinds)
             (fn [auto]
               (boundary/run-mutations! deps plans (into declared auto))))))))))
+
+(defn coverage
+  "Coverage over the project's own ClojureScript, worst-covered namespace first."
+  [params]
+  (with-session
+    params
+    (fn [s]
+      (r/bind
+       (boundary/run-coverage! (:manifest s))
+       (fn [{:keys [report process]}]
+         (let [rows (-> (:coverage/rows report)
+                        (cov/matching (:filter params))
+                        cov/worst-first)]
+           (r/ok (cond-> {:build      (:coverage/build report)
+                          :tests      (:tests process)
+                          :verdict    (:coverage/verdict report)
+                          :totals     (:coverage/totals report)
+                          :report-dir (:coverage/report-dir report)
+                          :namespaces (mapv cov/brief rows)}
+                   (:coverage/deltas report)
+                   (assoc :deltas (:coverage/deltas report)
+                          :regressions (cov/regressions (:coverage/deltas report)))))))))))
+
+(defn coverage-baseline
+  "Freeze the current summary as the baseline the next run reports against."
+  [params]
+  (with-session params (fn [s] (boundary/save-baseline! (:manifest s)))))
 
 (defn watch-start
   [params]

@@ -28,6 +28,12 @@
    "eval"         {:fn h/eval-cljs
                    :doc "Evaluate ClojureScript in a build's running runtime"
                    :params [:build :code]}
+   "coverage"     {:fn h/coverage
+                   :doc "Coverage over the project's own ClojureScript, worst namespace first"
+                   :params [:filter]}
+   "coverage baseline" {:fn h/coverage-baseline
+                        :doc "Freeze the current summary as the baseline for the next delta"
+                        :params []}
    "e2e list"     {:fn h/e2e-list
                    :doc "List scenarios declared in the manifest"
                    :params []}
@@ -144,7 +150,7 @@
    {:type "object"
     :properties
     {"command"   {:type "string"
-                  :description "Subcommand, e.g. 'status', 'e2e run', 'watch start'"}
+                  :description "Subcommand, e.g. 'status', 'e2e run', 'coverage'"}
      "directory" {:type "string"
                   :description "Project root holding hive-cljs.edn (defaults to cwd)"}
      "build"     {:type "string" :description "shadow-cljs build id, e.g. 'app'"}
@@ -152,6 +158,8 @@
      "scenario"  {:type "string" :description "Scenario id for 'e2e run'"}
      "tags"      {:type "string" :description "Comma-separated tags for 'e2e run'"}
      "depth"     {:type "string" :description "Search depth for 'e2e run-all' (default 3)"}
+     "filter"    {:type "string"
+                  :description "Narrow 'coverage' to namespaces containing this substring"}
      "auto"      {:type "string"
                   :description "Derive faults for 'e2e mutate': 'true', or 'sub,event'"}}
     :required ["command"]}

@@ -57,6 +57,23 @@
    [:browser/nav-settle-ms s/Millis]
    [:browser/assert-poll-ms s/Millis]])
 
+(def CoverageProfile
+  "How a coverage tool is invoked, and how the toolchain it measures names the
+   modules on disk."
+  [:map {:closed true}
+   [:profile/id :keyword]
+   [:coverage/command [:vector s/NonBlankString]]
+   [:coverage/include-flag s/NonBlankString]
+   [:coverage/exclude-flag s/NonBlankString]
+   [:coverage/reporter-flag s/NonBlankString]
+   [:coverage/reporters [:vector {:min 1} s/NonBlankString]]
+   [:coverage/summary-reporter s/NonBlankString]
+   [:coverage/report-dir-flag s/NonBlankString]
+   [:coverage/summary-file s/NonBlankString]
+   [:coverage/compiled-layout s/CompiledLayout]
+   [:coverage/compiled-root s/NonBlankString]
+   [:coverage/module-suffix s/NonBlankString]])
+
 ;; =============================================================================
 ;; Measured profiles
 ;; =============================================================================
@@ -109,13 +126,36 @@
    :browser/nav-settle-ms  250
    :browser/assert-poll-ms 100})
 
+(def c8-default
+  "c8 (V8 coverage + istanbul reporters) measuring a shadow-cljs `:node-test`
+   bundle.
+
+   `:coverage/compiled-layout :flat-dotted` and `:coverage/compiled-root` are
+   read off shadow-cljs's own emitted tree, not its docs: every namespace lands
+   in one flat directory as `<munged.ns>.js`. The include/exclude globs are
+   built from that layout, because c8 filters the COMPILED script URL — the
+   `.cljs` paths in the report only exist after source-map remapping."
+  {:profile/id                 :coverage/c8
+   :coverage/command           ["npx" "c8"]
+   :coverage/include-flag      "--include"
+   :coverage/exclude-flag      "--exclude"
+   :coverage/reporter-flag     "--reporter"
+   :coverage/reporters         ["json-summary" "text-summary"]
+   :coverage/summary-reporter  "json-summary"
+   :coverage/report-dir-flag   "--report-dir"
+   :coverage/summary-file      "coverage-summary.json"
+   :coverage/compiled-layout   :flat-dotted
+   :coverage/compiled-root     ".shadow-cljs/builds/{build}/dev/out/cljs-runtime"
+   :coverage/module-suffix     ".js"})
+
 ;; =============================================================================
 ;; Registry — the swap point
 ;; =============================================================================
 
 (defonce ^:private registry
-  (atom {:relay   {:shadow/default shadow-relay-default}
-         :browser {:browser/default browser-default}}))
+  (atom {:relay    {:shadow/default shadow-relay-default}
+         :browser  {:browser/default browser-default}
+         :coverage {:coverage/c8 c8-default}}))
 
 (defn register!
   "Register a profile under `family` (:relay | :browser). Returns the id."
@@ -135,6 +175,10 @@
 (defn browser-profile
   ([] (browser-profile :browser/default))
   ([id] (or (profile :browser id) browser-default)))
+
+(defn coverage-profile
+  ([] (coverage-profile :coverage/c8))
+  ([id] (or (profile :coverage id) c8-default)))
 
 (defn normalize-state
   "Map a provider's raw status token to `schema/BuildState`."

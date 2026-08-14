@@ -1,8 +1,8 @@
 # hive-cljs
 
 ClojureScript development as a hive IAddon: **shadow-cljs build status, cljs-eval,
-Playwright e2e scenarios and build→e2e watching**, driven by config in your
-project root.
+Playwright e2e scenarios, per-namespace coverage and build→e2e watching**, driven
+by config in your project root.
 
 One addon. One `cljs` subdomain on the `code` tool. Three ports.
 
@@ -97,10 +97,37 @@ input vocabulary and the watcher, in one small app.
 | `cljs e2e list \| run` | run a scenario (`scenario`) or a tag set (`tags`) |
 | `cljs e2e run-all` | fan the same run out over every descendant project that authors config |
 | `cljs e2e mutate` | inject faults and report the ones no scenario killed |
+| `cljs coverage` | per-namespace coverage of your own ClojureScript, worst first |
+| `cljs coverage baseline` | freeze the current numbers so the next run reports a delta |
 | `cljs watch start \| stop \| status` | couple build success to e2e runs |
 | `cljs help` | subcommand index |
 
 All accept `directory` (project root; defaults to cwd).
+
+## Coverage, in ClojureScript terms
+
+cloverage is JVM-only, so ClojureScript projects tend to have no coverage number
+at all. `cljs coverage` runs the node-test bundle under a coverage provider and
+remaps V8's output through shadow-cljs source maps, so the report is keyed by
+**namespace**, not by compiled artifact:
+
+```clojure
+{:verdict    #:coverage{:state :pass :breaches []}
+ :totals     #:coverage{:namespaces 83
+                        :lines #:metric{:covered 9577 :total 11447 :pct 83.66}}
+ :namespaces [{:ns "payment-flow.views.upload-file-list" :lines [32.2 40 124] ...}
+              ...]}
+```
+
+Two things it refuses to do. It will not let you write file globs: you declare
+`:source-prefixes ["your-app"]` in namespace spelling, and the emitted-module
+layout is provider data — shadow-cljs writes one flat directory of dotted names,
+so a hand-written path glob silently matches nothing and reports `0/0`. And it
+will not report a delta in percentages: V8 only enumerates branch ranges inside
+functions it actually ran, so **new tests enlarge the denominator** and a
+percentage can fall while coverage rose. Deltas are covered counts.
+
+A run that measured nothing is `:unavailable`, never a pass.
 
 ## Three ways a suite can lie, and what answers each
 

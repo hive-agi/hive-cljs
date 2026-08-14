@@ -177,23 +177,14 @@
    [:debounce-ms Millis]
    [:builds {:optional true} [:set BuildId]]])
 
-(def Manifest
-  "Normalized project config — every default resolved."
-  [:map {:closed true}
-   [:manifest/root NonBlankString]
-   [:manifest/sources {:optional true} [:vector NonBlankString]]
-   [:manifest/shadow ShadowConfig]
-   [:manifest/builds [:map-of BuildId BuildSpec]]
-   [:manifest/e2e E2eConfig]
-   [:manifest/watch WatchPolicy]])
-
 (def RawManifest
   "Project-authored `hive-cljs.edn` before normalization."
   [:map
    [:hive.cljs/shadow {:optional true} [:map-of :keyword :any]]
    [:hive.cljs/builds {:optional true} [:map-of :keyword :any]]
    [:hive.cljs/e2e {:optional true} [:map-of :keyword :any]]
-   [:hive.cljs/watch {:optional true} [:map-of :keyword :any]]])
+   [:hive.cljs/watch {:optional true} [:map-of :keyword :any]]
+   [:hive.cljs/coverage {:optional true} [:map-of :keyword :any]]])
 
 ;; =============================================================================
 ;; Staleness
@@ -289,3 +280,139 @@
    [:decision/build {:optional true} BuildId]
    [:decision/scenarios {:optional true} [:vector ScenarioId]]
    [:decision/reason NonBlankString]])
+
+;; =============================================================================
+;; Coverage
+;; =============================================================================
+
+(def Count
+  "A non-negative instrumentation count. Bounded far above any real codebase so
+   that totals over generated data stay inside a long."
+  [:int {:min 0 :max 100000000}])
+
+(def CoverageMetric
+  "Covered/total for one instrumentation dimension, plus the derived percentage."
+  [:map {:closed true}
+   [:metric/covered Count]
+   [:metric/total Count]
+   [:metric/pct [:double {:min 0.0 :max 100.0}]]])
+
+(def CoverageRow
+  "One ClojureScript namespace's coverage, source-mapped back from the bundle."
+  [:map {:closed true}
+   [:coverage/ns NonBlankString]
+   [:coverage/file NonBlankString]
+   [:coverage/lines CoverageMetric]
+   [:coverage/branches CoverageMetric]
+   [:coverage/functions CoverageMetric]])
+
+(def SummedMetric
+  "A metric aggregated over many namespaces. Its counts are deliberately
+   unbounded above: a sum of per-namespace `Count`s legitimately exceeds the
+   per-namespace ceiling."
+  [:map {:closed true}
+   [:metric/covered [:int {:min 0}]]
+   [:metric/total [:int {:min 0}]]
+   [:metric/pct [:double {:min 0.0 :max 100.0}]]])
+
+(def CoverageTotals
+  [:map {:closed true}
+   [:coverage/namespaces [:int {:min 0}]]
+   [:coverage/lines SummedMetric]
+   [:coverage/branches SummedMetric]
+   [:coverage/functions SummedMetric]])
+
+(def CoverageDelta
+  "Change in COVERED COUNTS against a baseline; `:delta/new?` marks a namespace
+   the baseline never saw."
+  [:map {:closed true}
+   [:delta/ns NonBlankString]
+   [:delta/lines :int]
+   [:delta/branches :int]
+   [:delta/functions :int]
+   [:delta/new? :boolean]])
+
+(def CoverageDimension
+  [:enum :lines :branches :functions])
+
+(def Percentage
+  [:double {:min 0.0 :max 100.0}])
+
+(def CoverageThresholds
+  "Minimum acceptable percentage per dimension. An absent dimension is ungated."
+  [:map {:closed true}
+   [:lines {:optional true} Percentage]
+   [:branches {:optional true} Percentage]
+   [:functions {:optional true} Percentage]])
+
+(def CoverageState
+  [:enum :pass :below-threshold :unavailable])
+
+(def ThresholdBreach
+  [:map {:closed true}
+   [:breach/dimension CoverageDimension]
+   [:breach/required Percentage]
+   [:breach/actual Percentage]])
+
+(def CoverageVerdict
+  [:map {:closed true}
+   [:coverage/state CoverageState]
+   [:coverage/breaches [:vector ThresholdBreach]]])
+
+(def CompiledLayout
+  "How the toolchain names emitted modules on disk. `:flat-dotted` is what
+   shadow-cljs writes (payment_flow.views.editar.js); `:nested` is the directory
+   spelling other toolchains use."
+  [:enum :flat-dotted :nested])
+
+(def CoverageConfig
+  "Normalized `:hive.cljs/coverage` section."
+  [:map {:closed true}
+   [:coverage/build BuildId]
+   [:coverage/bundle NonBlankString]
+   [:coverage/profile :keyword]
+   [:coverage/compile [:vector NonBlankString]]
+   [:coverage/source-prefixes [:vector {:min 1} NonBlankString]]
+   [:coverage/exclude [:vector NonBlankString]]
+   [:coverage/report-dir NonBlankString]
+   [:coverage/baseline {:optional true} NonBlankString]
+   [:coverage/thresholds CoverageThresholds]
+   [:coverage/runner [:vector {:min 1} NonBlankString]]])
+
+(def CoveragePlan
+  "Pure, executable description of one coverage run.
+
+   `:plan/compile-argv` is empty when the project opts out of compiling first
+   (an already-built bundle, or a toolchain driven some other way)."
+  [:map {:closed true}
+   [:plan/compile-argv [:vector NonBlankString]]
+   [:plan/argv [:vector {:min 1} NonBlankString]]
+   [:plan/cwd NonBlankString]
+   [:plan/summary-path NonBlankString]])
+
+(def CoverageReport
+  [:map {:closed true}
+   [:coverage/build BuildId]
+   [:coverage/rows [:vector CoverageRow]]
+   [:coverage/totals CoverageTotals]
+   [:coverage/deltas {:optional true} [:vector CoverageDelta]]
+   [:coverage/verdict CoverageVerdict]
+   [:coverage/report-dir NonBlankString]])
+
+;; =============================================================================
+;; Manifest — normalized
+;; =============================================================================
+
+(def Manifest
+  "Normalized project config — every default resolved.
+
+   Defined after the section schemas it composes, so the coverage section can be
+   a typed entry rather than an opaque map."
+  [:map {:closed true}
+   [:manifest/root NonBlankString]
+   [:manifest/sources {:optional true} [:vector NonBlankString]]
+   [:manifest/shadow ShadowConfig]
+   [:manifest/builds [:map-of BuildId BuildSpec]]
+   [:manifest/e2e E2eConfig]
+   [:manifest/watch WatchPolicy]
+   [:manifest/coverage {:optional true} CoverageConfig]])
