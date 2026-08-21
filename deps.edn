@@ -7,13 +7,13 @@
   io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
   ;; hive-dsl — Result monad, ADTs, error taxonomy
-  io.github.hive-agi/hive-dsl   {:mvn/version "0.5.10"}
+  io.github.hive-agi/hive-dsl   {:mvn/version "0.5.14"}
 
   ;; hive-di — defconfig: typed env/literal sources, Result-returning resolution
-  io.github.hive-agi/hive-di    {:mvn/version "0.4.1"}
+  io.github.hive-agi/hive-di    {:mvn/version "0.4.2"}
 
   ;; hive-schemas — malli value objects + schema-synthesized test facets
-  io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}
+  io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}
 
   ;; hive-weave — bounded execution primitives for the watch supervisor
   io.github.hive-agi/hive-weave {:mvn/version "0.3.1"}
@@ -21,7 +21,7 @@
   ;; hive-events — event bus for build → e2e coupling
   io.github.hive-agi/hive-events {:mvn/version "0.5.6"}
 
-  metosin/malli                 {:mvn/version "0.19.1"}
+  metosin/malli                 {:mvn/version "0.20.1"}
 
   ;; shadow-cljs remote-relay transport (websocket + transit)
   com.cognitect/transit-clj     {:mvn/version "1.0.333"}
@@ -56,11 +56,11 @@
   :nrepl
   {:extra-paths ["test" "dev"]
    :extra-deps {nrepl/nrepl       {:mvn/version "1.7.0"}
-                cider/cider-nrepl {:mvn/version "0.58.0"}}
+                cider/cider-nrepl {:mvn/version "0.62.2"}}
    :main-opts ["-m" "nrepl.cmdline"
                "--middleware" "[cider.nrepl/cider-middleware]"
                "--port" "7941"]}
 
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.8"}}
    :ns-default hive-build.api}}}
