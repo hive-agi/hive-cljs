@@ -1,5 +1,14 @@
 # hive-cljs
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/hive-cljs.svg)](https://clojars.org/io.github.hive-agi/hive-cljs)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/hive-cljs)](https://cljdoc.org/d/io.github.hive-agi/hive-cljs/CURRENT)
+[![release](https://github.com/hive-agi/hive-cljs/actions/workflows/release.yml/badge.svg)](https://github.com/hive-agi/hive-cljs/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<!-- /hive-badges -->
+
 ClojureScript development as a hive IAddon: **shadow-cljs build status, cljs-eval,
 Playwright e2e scenarios, per-namespace coverage and build→e2e watching**, driven
 by config in your project root.
