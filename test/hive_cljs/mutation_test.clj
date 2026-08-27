@@ -86,6 +86,25 @@
   (let [p (mutation/inject (plan-for [[:expect-sub [:x] "some?"]]) fault)]
     (is (= [:eval-cljs :expect-sub] (mapv :op/kind (:plan/ops p))))))
 
+(deftest the-fault-lands-after-the-waits-that-let-the-runtime-register
+  (testing "a runtime that has not registered answers no eval, so a fault
+            spliced between the goto and the boot waits ERRORS — and an errored
+            fault scores as a kill, which makes every fault look caught"
+    (let [p (mutation/inject
+             (plan-for [[:goto "/"] [:wait-for "#app"] [:wait-ms 10]
+                        [:eval-cljs "(seed!)"] [:expect-visible "#p"]])
+             fault)]
+      (is (= [:goto :wait-for :wait-ms :eval-cljs :eval-cljs :expect-visible]
+             (mapv :op/kind (:plan/ops p))))
+      (is (= (:fault/form fault)
+             (first (:op/args (nth (:plan/ops p) 3))))
+          "the fault runs before the scenario's own first eval, not after it")))
+  (testing "waits AFTER the scenario's own work are not boot barriers"
+    (let [p (mutation/inject
+             (plan-for [[:goto "/"] [:click "#go"] [:wait-for "#done"]]) fault)]
+      (is (= [:goto :eval-cljs :click :wait-for]
+             (mapv :op/kind (:plan/ops p)))))))
+
 (deftest injection-leaves-the-original-plan-alone
   (let [p (plan-for [[:goto "/"] [:click "#go"]])]
     (mutation/inject p fault)

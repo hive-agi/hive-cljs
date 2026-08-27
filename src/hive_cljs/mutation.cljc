@@ -67,17 +67,34 @@
      :op/args    [src]
      :op/source  [:eval-cljs src]}))
 
-(defn inject
-  "Splice a fault's op into a plan, immediately after its first `:goto`.
+(def boot-barrier-kinds
+  "Ops a scenario opens with to let the page come up. A fault is spliced AFTER
+   these, never between them and the navigation."
+  #{:wait-for :wait-ms :wait-for-sub :wait-for-db :expect-url})
 
-   After, not before: a fault is applied to a LIVE runtime, and the navigation
-   the scenario opens with replaces that runtime wholesale. A plan that never
-   navigates takes the fault at the head instead."
+(defn injection-point
+  "Index at which a fault op belongs in `ops`.
+
+   After the first `:goto`, because navigation replaces the runtime wholesale
+   and would wipe a fault applied before it — and then after the waits that
+   follow it, because a runtime the browser has not finished registering
+   answers no eval at all. Splicing between the two is how a fault ERRORS
+   instead of taking effect, which scores as a kill and makes every fault look
+   caught. A plan that never navigates takes the fault at the head."
+  [ops]
+  (if-let [i (first (keep-indexed #(when (= :goto (:op/kind %2)) %1) ops))]
+    (loop [at (inc i)]
+      (if (and (< at (count ops))
+               (contains? boot-barrier-kinds (:op/kind (nth ops at))))
+        (recur (inc at))
+        at))
+    0))
+
+(defn inject
+  "Splice a fault's op into a plan at [[injection-point]]."
   [plan fault]
   (let [ops (vec (:plan/ops plan))
-        at  (if-let [i (first (keep-indexed #(when (= :goto (:op/kind %2)) %1) ops))]
-              (inc i)
-              0)]
+        at  (injection-point ops)]
     (assoc plan :plan/ops
            (into (subvec ops 0 at) cat [[(fault-op fault)] (subvec ops at)]))))
 
@@ -125,6 +142,7 @@
 
 (m/=> normalize-faults [:=> [:cat [:maybe [:sequential :any]]] [:vector s/Fault]])
 (m/=> fault-op [:=> [:cat s/Fault] s/Op])
+(m/=> injection-point [:=> [:cat [:sequential :map]] :int])
 (m/=> inject [:=> [:cat s/RunPlan s/Fault] s/RunPlan])
 (m/=> killed-by [:=> [:cat [:sequential :any]] [:vector s/ScenarioId]])
 (m/=> verdict [:=> [:cat s/Fault [:sequential :any]] s/FaultVerdict])
