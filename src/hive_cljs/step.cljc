@@ -96,10 +96,12 @@
 (def runtime-rules
   "Steps routed to ICljsEval instead of the browser.
 
-   Two vocabularies, one channel. The `-sub`/`-db` kinds are re-frame's and only
-   a ClojureScript runtime renders them; the `-js` kinds are every stack's,
-   because a page is a page whatever compiled it. A channel that cannot render
-   a kind reports `:incomplete` rather than failing the step.
+   Three vocabularies, one channel. The `-sub`/`-db` kinds are re-frame's and
+   only a ClojureScript runtime renders them. The `-js` kinds are every stack's,
+   because a page is a page whatever compiled it. The `-state` kinds are every
+   stack's too, but read through the `@hive-agi/probe` contract instead of a
+   per-app expression — which is what lets one scenario vocabulary span stacks.
+   A channel that cannot render a kind reports `:incomplete`.
 
    The `:wait-for-*` kinds are the condition-wait counterpart of the DOM-level
    `:wait-for`: same expression as the matching `:expect-*`, polled until the
@@ -112,7 +114,9 @@
    (runtime-rule :wait-for-db 2)
    (runtime-rule :eval-js 1)
    (runtime-rule :expect-js 1)
-   (runtime-rule :wait-for-js 1)])
+   (runtime-rule :wait-for-js 1)
+   (runtime-rule :expect-state 2)
+   (runtime-rule :wait-for-state 2)])
 
 ;; Semantics of a runtime kind live NEXT TO the rule that defines it, so adding
 ;; a kind is one file rather than two. The boundary reads these rather than
@@ -121,12 +125,12 @@
 (def assertion-kinds
   "Runtime kinds whose returned value IS the assertion — a falsy answer fails
    the step rather than merely being reported."
-  #{:expect-sub :expect-db :expect-js})
+  #{:expect-sub :expect-db :expect-js :expect-state})
 
 (def poll-kinds
   "Runtime kinds that poll a condition until it holds instead of asserting it
    once."
-  #{:wait-for-sub :wait-for-db :wait-for-js})
+  #{:wait-for-sub :wait-for-db :wait-for-js :wait-for-state})
 
 (def artifact-rules
   [(browser-rule :screenshot 1)])

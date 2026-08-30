@@ -69,6 +69,7 @@ decided by `:hive.cljs/toolchain`:
 |---|---|---|
 | re-frame | `:eval-cljs` `:dispatch` `:expect-sub` `:expect-db` `:wait-for-sub` `:wait-for-db` | a ClojureScript app over the shadow nREPL (`:shadow-cljs`) |
 | JavaScript | `:eval-js` `:expect-js` `:wait-for-js` | **any** app, evaluated in the page (`:browser`, and any driver that can evaluate) |
+| probe | `:expect-state` `:wait-for-state` | any app that installed `@hive-agi/probe` |
 
 A step whose vocabulary the connected channel does not speak reports
 `:incomplete` — never a pass, and never a failure of your application:
@@ -134,6 +135,44 @@ Two things the JavaScript channel deliberately cannot do, both of which report
 rather than pretend: the `:app-db-schema` invariant, and `cljs e2e mutate`'s
 `--auto` fault derivation. Both mean rewriting the application's own handler
 registry, which reading a page does not permit. Declared `:faults` still work.
+
+### The probe vocabulary
+
+`:expect-js` works, but every app spells its own state differently, so a suite
+written that way is a pile of per-app expressions. The
+[`@hive-agi/probe`](../probe/) package is one line in the application and gives
+every stack the *same* accessor:
+
+```js
+import { expose } from '@hive-agi/probe'
+expose('model', () => store.getState())
+```
+
+| Step | Reads |
+|---|---|
+| `[:expect-state ["model" "user" "name"] "v !== null"]` | `window.__hive__.read(["model","user","name"])` |
+| `[:wait-for-state ["model" "loading"] "v === false"]` | the same, polled until it holds |
+
+The first path segment names the exposed source; the rest indexes into it, and
+integer segments index arrays (`["model" "items" 0 "id"]`). `v` in the predicate
+is the value that was read, and a passing assertion reports that value rather
+than a bare `true`.
+
+This is the counterpart of `:expect-sub` for stacks that are not re-frame — same
+shape, same debugging property: `:expect-text` red while `:expect-state` green
+localises a bug to rendering rather than to state.
+
+A page with no probe fails with a message naming the fix, rather than reading
+`undefined` — an absent probe and a genuinely absent value are different
+failures, and only the second is about the application. A path that runs off the
+end of the data reads `null`, which is an ordinary assertion failure.
+
+Elm keeps no state in JavaScript, so it pushes instead:
+
+```js
+import { pushed } from '@hive-agi/probe'
+app.ports.hiveState.subscribe(pushed('model'))
+```
 
 ### Condition-waits on state
 

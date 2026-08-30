@@ -53,6 +53,36 @@
   (is (nil? (js/assertion-source (op :expect-sub [:user] "some?"))))
   (is (nil? (js/probe-source (op :wait-for-sub [:user] "some?")))))
 
+(deftest the-probe-vocabulary-reads-through-one-contract
+  (let [src (js/assertion-source (op :expect-state ["model" "user" "name"] "v !== null"))]
+    (testing "the path is a JSON array whose first segment names the source"
+      (is (str/includes? src "read([\"model\",\"user\",\"name\"])")))
+    (testing "the predicate sees the read value as v"
+      (is (str/includes? src "v !== null")))
+    (testing "and a pass reports the value rather than a bare true"
+      (is (str/includes? src "? v : false")))))
+
+(deftest a-missing-probe-is-a-different-failure-from-a-missing-value
+  ;; Reading undefined off an absent global would report 'the app does not have
+  ;; this' when the truth is 'nobody installed the probe'. Only one of those is
+  ;; about the application.
+  (let [src (js/assertion-source (op :expect-state ["model"] "v"))]
+    (is (str/includes? src "if (!window.__hive__) throw new Error"))
+    (is (str/includes? src "@hive-agi/probe")
+        "the error names the fix")))
+
+(deftest a-path-segment-may-be-a-keyword-or-an-index
+  (is (= "[\"model\",\"items\",0,\"id\"]"
+         (js/json-path [:model "items" 0 :id]))))
+
+(deftest probe-state-steps-run-end-to-end
+  (let [[res driver] (run [[:goto "/"] [:expect-state ["model" "ready"] "v === true"]]
+                          (constantly true))]
+    (is (r/ok? res))
+    (is (verdict/run-ok? (:ok res)))
+    (let [[[_ src]] (stub/page-evals driver)]
+      (is (str/includes? src "window.__hive__.read")))))
+
 ;; =============================================================================
 ;; The channel's shape is the argument
 ;; =============================================================================

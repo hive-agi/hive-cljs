@@ -1,0 +1,45 @@
+{
+  "name": "@hive-agi/probe",
+  "version": "0.1.0",
+  "description": "Expose your application's state to a hive-cljs e2e scenario — one line, any frontend stack.",
+  "license": "MIT",
+  "author": "Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "keywords": [
+    "testing",
+    "e2e",
+    "playwright",
+    "elm",
+    "react",
+    "svelte",
+    "vue",
+    "hive-cljs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hive-agi/hive-cljs.git",
+    "directory": "probe"
+  },
+  "homepage": "https://github.com/hive-agi/hive-cljs/tree/main/probe",
+  "publishConfig": {
+    "access": "public"
+  }
+}
