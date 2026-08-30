@@ -198,7 +198,7 @@ Every test injects a stub through the ports — `StubBuildTool` (with
 suite runs with nothing installed:
 
 ```bash
-clojure -M:test    # 181 tests, 727 assertions
+clojure -M:test    # 308 tests, 1128 assertions
 ```
 
 `defscenarios` is tested by expanding it against real temp project trees and
