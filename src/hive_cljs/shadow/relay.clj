@@ -81,13 +81,24 @@
    :ws-client   nil
    :last-error  nil})
 
+(def ^:private max-text-message-bytes
+  "Cap for an inbound relay text frame, in bytes."
+  (* 64 1024 1024))
+
 (defn- daemon-ws-client
-  "A websocket client whose threads cannot keep a host JVM from exiting."
+  "A websocket client whose threads cannot keep a host JVM from exiting.
+
+   Inbound text frames are accepted up to `max-text-message-bytes`, not
+   Jetty's 64 KiB default."
   ^WebSocketClient []
-  (let [pool (doto (QueuedThreadPool.)
-               (.setName "hive-cljs-relay")
-               (.setDaemon true))]
-    (WebSocketClient. ^Executor pool)))
+  (let [pool   (doto (QueuedThreadPool.)
+                 (.setName "hive-cljs-relay")
+                 (.setDaemon true))
+        client (WebSocketClient. ^Executor pool)]
+    (doto (.getPolicy client)
+      (.setMaxTextMessageSize max-text-message-bytes)
+      (.setMaxTextMessageBufferSize max-text-message-bytes))
+    client))
 
 (defn- notify-subs!
   [state-ref prof build-ids]
