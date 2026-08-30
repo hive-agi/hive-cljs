@@ -7,6 +7,10 @@ Everything below was executed while building this library; the numbers and error
 strings are real. If you would rather start from something that already runs,
 [`example/`](../example/) is this walkthrough's end state, committed.
 
+> **Not a ClojureScript project?** Skip to
+> [Any other stack](#any-other-stack--elm-react-svelte-vue) at the bottom — it is
+> shorter, because there is no build server to wire up.
+
 ## 1. A minimal shadow-cljs project
 
 ```
@@ -278,6 +282,110 @@ The hook would run exactly when it is no longer needed. hive-cljs's own relay po
 is created daemon for that reason, so a forgotten teardown degrades to a leaked
 connection rather than a wedged CI job — but closing explicitly is still the
 contract.
+
+## Any other stack — Elm, React, Svelte, Vue
+
+Everything above wires up a *ClojureScript* project, most of which is shadow-cljs
+plumbing. For any other stack there is less to do, because there is no build
+server to connect to and no nREPL port to find.
+
+### 1. Config
+
+```clojure
+;; hive-cljs.edn
+{:project-id "inbox"
+ :hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 8000
+                          :command ["elm" "make" "src/Main.elm"
+                                    "--output=public/app.js"]}}
+ :hive.cljs/e2e {:scenarios
+                 [{:id :smoke
+                   :steps [[:goto "/"]
+                           [:expect-text "h1" "Inbox"]]}]}}
+```
+
+`:command` is optional — leave it out and scenarios still run, you just get no
+build verdict. `:http-port` is whatever serves your app; hive infers `:base-url`
+from it.
+
+### 2. Serve the app and check the wiring
+
+```bash
+elm make src/Main.elm --output=public/app.js
+npx http-server public -p 8000
+```
+
+```clojure
+code {command: "cljs doctor", directory: "/path/to/inbox"}
+```
+
+`:toolchain` reads `:browser` and `:ports {:browser :ok}` is the one that has to
+be green. `:cljs-eval :ok` too — that channel is the page itself, so it comes up
+with the driver.
+
+### 3. Assert on the DOM
+
+```clojure
+code {command: "cljs e2e run", directory: "/path/to/inbox", scenario: "smoke"}
+```
+
+This much works with no changes to your application at all.
+
+### 4. Assert on state
+
+DOM assertions alone cannot tell "the state is wrong" from "the state is right
+and rendering is wrong" — which is most of what an e2e failure needs to tell you.
+Add the probe:
+
+```bash
+npm i -D @hive-agi/probe
+```
+
+Elm keeps no state in JavaScript, so send it out through a port:
+
+```elm
+port hiveState : Encode.Value -> Cmd msg
+
+update msg model =
+    ( newModel, hiveState (encodeModel newModel) )
+```
+
+```js
+import { pushed } from '@hive-agi/probe'
+const app = Elm.Main.init({ node: document.getElementById('root') })
+app.ports.hiveState.subscribe(pushed('model'))
+```
+
+For a store-based framework it is one line instead:
+
+```js
+import { expose } from '@hive-agi/probe'
+expose('model', () => store.getState())
+```
+
+Now both channels are available in one step vector:
+
+```clojure
+[[:goto "/"]
+ [:click "#refresh"]
+ [:wait-for-state ["model" "loading"] "v === false"]
+ [:expect-state  ["model" "items" "length"] "v === 3"]   ; state
+ [:expect-text   "#count" "3 messages"]]                  ; rendering
+```
+
+Red on the last line while the one above it is green localises the bug to the
+view. That split is the reason to expose state at all.
+
+`[:expect-js "…"]` is there too when you would rather write a raw expression
+than install anything.
+
+### What this toolchain does not do
+
+Two features are ClojureScript-specific, and both **report** rather than
+pretending: the `:app-db-schema` invariant, and `cljs e2e mutate --auto`. Both
+mean rewriting the application's own handler registry, which reading a page does
+not permit. Declared `:faults` still work, so mutation testing is available — it
+just needs you to say what to break.
 
 ## Troubleshooting
 
