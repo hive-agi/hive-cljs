@@ -4,7 +4,8 @@
    Every test depends on `hive-cljs.ports` and injects one of these; no test
    namespace names a build toolchain or a browser."
   (:require [hive-cljs.ports :as ports]
-            [hive-dsl.result :as r]))
+            [hive-dsl.result :as r]
+            [hive-cljs.dialect.re-frame :as re-frame]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -140,7 +141,21 @@
       (r/err e {:build build-id})
       (r/ok (vec (get-in @state-ref [:connected build-id])))))
 
-  (pinned-runtime [_] (:bound @state-ref)))
+  (pinned-runtime [_] (:bound @state-ref))
+
+  ;; A stub can only discharge a contract it actually mirrors, so it renders
+  ;; through the SAME dialect the shipped ClojureScript channel uses rather
+  ;; than inventing a source text of its own — a test asserting on the emitted
+  ;; expression is then asserting on the real rendering.
+  ports/IRuntimeDialect
+  (assertion-source [_ op] (re-frame/assertion-source op))
+  (probe-source [_ op] (re-frame/probe-source op))
+
+  ports/IRuntimeIntrospection
+  (invariant-source [_ schema frame]
+    (re-frame/app-db-invariant-form schema (re-frame/db-root-form frame)))
+  (registry-source [_ kinds] (re-frame/registry-map-form kinds))
+  (neutralize-source [_ kind id] (re-frame/neutralize-form kind id)))
 
 (defrecord StubCljsEvalNoAffinity [state-ref value-fn]
   ports/ICljsEval
@@ -151,7 +166,20 @@
         v
         (r/ok {:value v :printed ""}))))
 
-  (runtime-available? [_ _] true))
+  (runtime-available? [_ _] true)
+
+  ;; Missing affinity and inventory is a different absence from missing a
+  ;; dialect: this stub still speaks the vocabulary, it just cannot pin or
+  ;; enumerate a runtime.
+  ports/IRuntimeDialect
+  (assertion-source [_ op] (re-frame/assertion-source op))
+  (probe-source [_ op] (re-frame/probe-source op))
+
+  ports/IRuntimeIntrospection
+  (invariant-source [_ schema frame]
+    (re-frame/app-db-invariant-form schema (re-frame/db-root-form frame)))
+  (registry-source [_ kinds] (re-frame/registry-map-form kinds))
+  (neutralize-source [_ kind id] (re-frame/neutralize-form kind id)))
 
 (defn cljs-eval
   "Affinity-capable eval stub. By default any stamp identifies a runtime;
@@ -168,6 +196,21 @@
    and cannot enumerate one. Exercises both degradation paths."
   ([] (cljs-eval-without-affinity (constantly true)))
   ([value-fn] (->StubCljsEvalNoAffinity (atom {:evals [] :binds []}) value-fn)))
+
+(defrecord StubCljsEvalNoDialect [state-ref value-fn]
+  ports/ICljsEval
+  (eval-cljs [_ build-id form-str]
+    (swap! state-ref update :evals conj [build-id form-str])
+    (r/ok {:value (value-fn build-id form-str) :printed ""}))
+
+  (runtime-available? [_ _] true))
+
+(defn cljs-eval-without-dialect
+  "A channel that can evaluate but speaks no step vocabulary — what a runtime
+   for a stack this library has never heard of looks like before anyone teaches
+   it one. Exercises the `:incomplete` degradation rather than a silent pass."
+  ([] (cljs-eval-without-dialect (constantly true)))
+  ([value-fn] (->StubCljsEvalNoDialect (atom {:evals []}) value-fn)))
 
 (defn binds [stub] (:binds @(:state-ref stub)))
 (defn bound-runtime [stub] (:bound @(:state-ref stub)))

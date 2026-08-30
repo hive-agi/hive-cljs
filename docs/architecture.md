@@ -15,10 +15,11 @@ PROMOTE    verdict   (raw payload → verdict / report)
 COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
+DIALECT    dialect/re-frame (op → ClojureScript source text)
 REGISTRY   toolchain (id → IToolchain)   ← the composition root's swap point
 ADAPTERS   shadow/toolchain → IToolchain
              ├ shadow/relay → IBuildTool
-             └ shadow/nrepl → ICljsEval
+             └ shadow/nrepl → ICljsEval + IRuntimeDialect + IRuntimeIntrospection
            browser/playwright → IBrowserDriver
 ```
 
@@ -82,6 +83,41 @@ Two properties the registry is built to keep:
 
 The browser is deliberately *not* behind this: `IBrowserDriver` is already stack
 agnostic — it drives a page, and a page is a page whatever compiled it.
+
+## The runtime dialect
+
+A step says *what* to assert; the dialect says what that means in the language
+the runtime evaluates. Two optional capabilities on the runtime channel:
+
+```clojure
+(defprotocol IRuntimeDialect
+  (assertion-source [this op]) (probe-source [this op]))
+
+(defprotocol IRuntimeIntrospection
+  (invariant-source [this schema frame])
+  (registry-source [this kinds]) (neutralize-source [this kind id]))
+```
+
+`:expect-sub` / `:expect-db` / `:dispatch` are **re-frame** vocabulary, not
+ClojureScript vocabulary and certainly not shadow-cljs vocabulary — so their
+rendering lives in `hive-cljs.dialect.re-frame`, and the shadow nREPL channel
+implements the capability by delegating there. `boundary` asks the channel.
+
+Both are optional and both degrade to `:incomplete`, never to a pass:
+
+- no `IRuntimeDialect` — the channel evaluates but speaks no step vocabulary
+- a kind this dialect does not render — `assertion-source` returns nil rather
+  than assembling an expression out of the wrong arguments
+- no `IRuntimeIntrospection` — an `:app-db-schema` invariant reports that it was
+  never asserted, and `cljs e2e mutate --auto` says to declare `:faults` instead
+
+They are two protocols rather than one because rendering an assertion and
+rewriting a live handler registry are different powers: a channel may well do
+the first for any application and the second for none.
+
+`dialect_test.clj` carries a guard that `boundary` requires no namespace under
+`hive-cljs.shadow` or `hive-cljs.browser` — the require that used to break that
+looked entirely reasonable at the call site.
 
 ## The optional capabilities
 
@@ -193,7 +229,8 @@ a `:rel` restating the decision.
 
 | Want to | Do |
 |---|---|
-| add a step kind | append an `IStepRule` (+ a `perform-op` defmethod for browser kinds) |
+| add a step kind | append an `IStepRule` (+ a `perform-op` defmethod for browser kinds, or a dialect rendering for runtime kinds) |
+| teach a runtime channel a vocabulary | implement `IRuntimeDialect` on it, rendering through a `hive-cljs.dialect.*` namespace |
 | support another frontend stack | implement `IToolchain`, `toolchain/register!` it, declare `:hive.cljs/toolchain` |
 | support another build tool | implement `IBuildTool`, return it from a toolchain's `open-build-tool` |
 | swap the browser | implement `IBrowserDriver` (+ `IPageMarker` to keep runtime pinning) |

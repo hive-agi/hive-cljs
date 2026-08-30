@@ -100,6 +100,43 @@
     "Return the runtime id `IRuntimeAffinity/bind-runtime!` pinned, or nil when
      evaluation still goes to the toolchain's own choice."))
 
+(defprotocol IRuntimeDialect
+  "Optional: render a runtime op as source text this channel's runtime evaluates.
+
+   Segregated from `ICljsEval` because being able to EVALUATE is not the same as
+   knowing a step VOCABULARY. The shipped ClojureScript channel speaks re-frame;
+   a browser-backed one speaks JavaScript; a third party may speak neither and
+   still serve a bare eval of the author's own source text.
+
+   Both methods return nil for an op kind the dialect has no rendering for — the
+   step is then reported `:incomplete`, never silently passed."
+
+  (assertion-source [this op]
+    "Source text whose value `op` asserts on.")
+
+  (probe-source [this op]
+    "Source text yielding `[predicate-result observed-value]` for a polled op.
+     The observed value is what lets a timeout say `never happened` apart from
+     `not yet`."))
+
+(defprotocol IRuntimeIntrospection
+  "Optional: read and rewrite the application's own handler registry.
+
+   Kept apart from `IRuntimeDialect` because rendering an assertion and
+   rewriting a live registry are different powers: a channel may well do the
+   first for any application and the second for none."
+
+  (invariant-source [this schema frame]
+    "Source text validating the whole application state against `schema`,
+     yielding nil when it conforms.")
+
+  (registry-source [this kinds]
+    "Source text reading the app's registered handler ids for `kinds` in ONE
+     round trip: `{kind [id …] …}`.")
+
+  (neutralize-source [this kind id]
+    "Source text re-registering handler `id` of `kind` as a no-op."))
+
 ;; =============================================================================
 ;; IToolchain — how one frontend stack's channels are opened and released
 ;; =============================================================================
@@ -137,5 +174,8 @@
 (defn page-marker? [x] (satisfies? IPageMarker x))
 (defn runtime-affinity? [x] (satisfies? IRuntimeAffinity x))
 (defn runtime-inventory? [x] (satisfies? IRuntimeInventory x))
+
+(defn runtime-dialect? [x] (satisfies? IRuntimeDialect x))
+(defn runtime-introspection? [x] (satisfies? IRuntimeIntrospection x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))

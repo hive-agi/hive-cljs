@@ -9,7 +9,6 @@
             [hive-cljs.manifest :as manifest]
             [hive-cljs.plan :as plan]
             [hive-cljs.ports :as ports]
-            [hive-cljs.shadow.nrepl :as nrepl-forms]
             [hive-cljs.verdict :as verdict]
             [hive-dsl.result :as r]
             [hive-cljs.mutation :as mutation]
@@ -271,32 +270,11 @@
 ;; Runtime-channel execution
 ;; =============================================================================
 
-(defn- runtime-expr
-  "Source text a runtime op evaluates."
-  [op]
-  (let [[a b] (:op/args op)
-        frame (:op/frame op)]
-    (case (:op/kind op)
-      :eval-cljs  (nrepl-forms/form->string a)
-      :dispatch   (nrepl-forms/dispatch-form a frame)
-      :expect-sub (nrepl-forms/predicate-call b (nrepl-forms/sub-form a frame))
-      :expect-db  (nrepl-forms/predicate-call b (nrepl-forms/db-form a frame))
-      (nrepl-forms/form->string a))))
-
 (def wait-kinds
   "Runtime steps that poll a condition instead of asserting it once."
   #{:wait-for-sub :wait-for-db})
 
 (defn wait-op? [op] (contains? wait-kinds (:op/kind op)))
-
-(defn- probe-expr
-  "Source text a condition-wait op evaluates: `[pred-result last-value]`."
-  [op]
-  (let [[a b] (:op/args op)
-        frame (:op/frame op)]
-    (case (:op/kind op)
-      :wait-for-sub (nrepl-forms/probe-call b (nrepl-forms/sub-form a frame))
-      :wait-for-db  (nrepl-forms/probe-call b (nrepl-forms/db-form a frame)))))
 
 (def default-wait-timeout-ms 15000)
 (def default-poll-ms 250)
@@ -307,35 +285,46 @@
   [v]
   (if (vector? v) [(first v) (second v)] [nil v]))
 
+(defn- unrendered-outcome
+  "A step the connected runtime channel has no rendering for.
+
+   `:incomplete` rather than `:fail`: the assertion was never attempted, and a
+   vocabulary the channel does not speak says nothing about the application."
+  [op]
+  {:state  :incomplete
+   :detail (str "the runtime channel has no rendering for " (:op/kind op)
+                " — that step vocabulary belongs to another stack")})
+
 (defn- poll-runtime!
   "Poll a condition-wait op until its predicate holds or the budget expires.
 
    The failure detail carries the LAST OBSERVED value, not just a false —
    'never happened' and 'not yet' need different fixes."
   [cljs-eval build-id op {:keys [timeout-ms poll-ms]}]
-  (let [budget   (or timeout-ms default-wait-timeout-ms)
-        interval (max 50 (or poll-ms default-poll-ms))
-        expr     (probe-expr op)
-        started  (System/currentTimeMillis)
-        deadline (+ started budget)]
-    (loop []
-      (let [res     (ports/eval-cljs cljs-eval build-id expr)
-            elapsed (- (System/currentTimeMillis) started)]
-        (if (r/err? res)
-          {:state :error :detail (pr-str res) :elapsed-ms elapsed}
-          (let [[held? v] (probe-result (get-in res [:ok :value]))]
-            (cond
-              (and (some? held?) (not (false? held?)))
-              {:state :pass :detail (pr-str v) :elapsed-ms elapsed}
+  (if-let [expr (ports/probe-source cljs-eval op)]
+    (let [budget   (or timeout-ms default-wait-timeout-ms)
+          interval (max 50 (or poll-ms default-poll-ms))
+          started  (System/currentTimeMillis)
+          deadline (+ started budget)]
+      (loop []
+        (let [res     (ports/eval-cljs cljs-eval build-id expr)
+              elapsed (- (System/currentTimeMillis) started)]
+          (if (r/err? res)
+            {:state :error :detail (pr-str res) :elapsed-ms elapsed}
+            (let [[held? v] (probe-result (get-in res [:ok :value]))]
+              (cond
+                (and (some? held?) (not (false? held?)))
+                {:state :pass :detail (pr-str v) :elapsed-ms elapsed}
 
-              (< (System/currentTimeMillis) deadline)
-              (do (Thread/sleep interval) (recur))
+                (< (System/currentTimeMillis) deadline)
+                (do (Thread/sleep interval) (recur))
 
-              :else
-              {:state :fail
-               :detail (str "condition never held within " budget "ms — last value "
-                            (pr-str v))
-               :elapsed-ms elapsed})))))))
+                :else
+                {:state :fail
+                 :detail (str "condition never held within " budget "ms — last value "
+                              (pr-str v))
+                 :elapsed-ms elapsed}))))))
+    (unrendered-outcome op)))
 
 (defn- assertion-op?
   [op]
@@ -344,6 +333,9 @@
 (defn perform-runtime!
   "Execute a :runtime op through ICljsEval. Returns an outcome map.
 
+   The channel renders the op into its own source language through
+   `IRuntimeDialect`; this layer only decides what the returned value means.
+
    `opts` is the plan's `:plan/runtime` — the polling budget for condition-wait
    steps. Absent, those fall back to the module defaults."
   ([cljs-eval build-id op] (perform-runtime! cljs-eval build-id op {}))
@@ -351,28 +343,34 @@
    (cond
      (nil? cljs-eval)
      {:state :incomplete
-      :detail "no CLJS eval port connected — set :nrepl-port and check the shadow nREPL is reachable (`cljs close` re-probes a cached dead connection)"}
+      :detail "no runtime eval port connected — set :nrepl-port and check the shadow nREPL is reachable (`cljs close` re-probes a cached dead connection)"}
 
      (nil? build-id)
      {:state :error
       :detail "runtime step needs a build: set :build on the scenario, or declare exactly one build in the manifest"}
 
+     (not (ports/runtime-dialect? cljs-eval))
+     {:state :incomplete
+      :detail "the connected runtime channel renders no step vocabulary at all"}
+
      (wait-op? op)
      (poll-runtime! cljs-eval build-id op opts)
 
      :else
-     (let [started (System/currentTimeMillis)
-           res     (ports/eval-cljs cljs-eval build-id (runtime-expr op))
-           elapsed (- (System/currentTimeMillis) started)]
-       (if (r/err? res)
-         {:state :error :detail (pr-str res) :elapsed-ms elapsed}
-         (let [v (get-in res [:ok :value])]
-           (if (assertion-op? op)
-             (if (and (some? v) (not (false? v)))
-               {:state :pass :detail (pr-str v) :elapsed-ms elapsed}
-               {:state :fail :detail (str "predicate returned " (pr-str v))
-                :elapsed-ms elapsed})
-             {:state :pass :detail (pr-str v) :elapsed-ms elapsed})))))))
+     (if-let [expr (ports/assertion-source cljs-eval op)]
+       (let [started (System/currentTimeMillis)
+             res     (ports/eval-cljs cljs-eval build-id expr)
+             elapsed (- (System/currentTimeMillis) started)]
+         (if (r/err? res)
+           {:state :error :detail (pr-str res) :elapsed-ms elapsed}
+           (let [v (get-in res [:ok :value])]
+             (if (assertion-op? op)
+               (if (and (some? v) (not (false? v)))
+                 {:state :pass :detail (pr-str v) :elapsed-ms elapsed}
+                 {:state :fail :detail (str "predicate returned " (pr-str v))
+                  :elapsed-ms elapsed})
+               {:state :pass :detail (pr-str v) :elapsed-ms elapsed}))))
+       (unrendered-outcome op)))))
 
 ;; =============================================================================
 ;; app-db invariant channel
@@ -399,22 +397,26 @@
 
    nil when the state conforms; a failing outcome otherwise. An eval that blows
    up is reported rather than swallowed — an invariant that cannot run is not an
-   invariant that held."
+   invariant that held. A channel that cannot read application state at all is
+   the same story, so it reports rather than passing quietly."
   [cljs-eval build-id {:keys [app-db-schema frame]}]
   (when (and cljs-eval build-id app-db-schema)
-    (let [expr (nrepl-forms/app-db-invariant-form
-                app-db-schema (nrepl-forms/db-root-form frame))
-          res  (ports/eval-cljs cljs-eval build-id expr)]
-      (cond
-        (r/err? res)
-        {:state  :error
-         :detail (str "app-db invariant could not be evaluated — does the build "
-                      "carry " app-db-schema " and malli? " (pr-str res))}
+    (if-not (ports/runtime-introspection? cljs-eval)
+      {:state  :incomplete
+       :detail (str "the runtime channel cannot read application state, so "
+                    app-db-schema " was never asserted")}
+      (let [expr (ports/invariant-source cljs-eval app-db-schema frame)
+            res  (ports/eval-cljs cljs-eval build-id expr)]
+        (cond
+          (r/err? res)
+          {:state  :error
+           :detail (str "app-db invariant could not be evaluated — does the build "
+                        "carry " app-db-schema " and malli? " (pr-str res))}
 
-        (some? (get-in res [:ok :value]))
-        {:state  :fail
-         :detail (str "app-db violates " app-db-schema ": "
-                      (pr-str (get-in res [:ok :value])))}))))
+          (some? (get-in res [:ok :value]))
+          {:state  :fail
+           :detail (str "app-db violates " app-db-schema ": "
+                        (pr-str (get-in res [:ok :value])))})))))
 
 ;; =============================================================================
 ;; Plan execution
@@ -565,18 +567,34 @@
 
    The zero-config half of the catalog: no manifest entry, no knowledge of the
    app's internals — a suite that survives every neutralized subscription is a
-   suite that never looked at the screen."
+   suite that never looked at the screen.
+
+   Needs `IRuntimeIntrospection`: deriving a catalog means rewriting the app's
+   own registry, which not every runtime channel can do. Declared faults stay
+   available to the ones that cannot."
   [deps plan kinds]
-  (if (empty? kinds)
-    (r/ok [])
-    (r/bind
-     (probe-runtime! deps plan (nrepl-forms/registry-map-form kinds))
-     (fn [registries]
-       (r/ok (vec (mapcat (fn [k]
-                            (map #(mutation/registry-fault
-                                   k % (nrepl-forms/neutralize-form k %))
-                                 (get registries k)))
-                          kinds)))))))
+  (let [ce (:cljs-eval deps)]
+    (cond
+      (empty? kinds) (r/ok [])
+
+      ;; Only when a channel is actually CONNECTED. With none at all, the probe
+      ;; below reports the missing port, and 'no runtime channel' is a better
+      ;; diagnosis than 'this channel lacks a capability' — the reader would
+      ;; otherwise go looking for a capability when nothing was connected.
+      (and (some? ce) (not (ports/runtime-introspection? ce)))
+      (r/err :mutation/no-introspection
+             {:hint (str "this runtime channel cannot enumerate the application's "
+                         "handlers — declare :faults explicitly under :hive.cljs/e2e")})
+
+      :else
+      (r/bind
+       (probe-runtime! deps plan (when ce (ports/registry-source ce kinds)))
+       (fn [registries]
+         (r/ok (vec (mapcat (fn [k]
+                              (map #(mutation/registry-fault
+                                     k % (ports/neutralize-source ce k %))
+                                   (get registries k)))
+                            kinds))))))))
 
 (defn- run-plans!
   "Run several plans, degrading a port failure into a red report rather than
