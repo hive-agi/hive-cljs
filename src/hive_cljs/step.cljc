@@ -99,7 +99,7 @@
    Three vocabularies, one channel. The `-sub`/`-db` kinds are re-frame's and
    only a ClojureScript runtime renders them. The `-js` kinds are every stack's,
    because a page is a page whatever compiled it. The `-state` kinds are every
-   stack's too, but read through the `@hive-agi/probe` contract instead of a
+   stack's too, but read through the injected probe contract instead of a
    per-app expression — which is what lets one scenario vocabulary span stacks.
    A channel that cannot render a kind reports `:incomplete`.
 

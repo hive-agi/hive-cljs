@@ -9,9 +9,14 @@
    Two levels of it. `:eval-js` / `:expect-js` / `:wait-for-js` take raw
    expressions and reach into whatever the app happens to expose — always
    available, and per-app. `:expect-state` / `:wait-for-state` read through the
-   `@hive-agi/probe` contract instead, which is what makes ONE scenario
-   vocabulary span stacks rather than each app inventing its own accessor."
-  (:require [clojure.string :as str]))
+   probe contract instead, which is what makes ONE scenario vocabulary span
+   stacks rather than each app inventing its own accessor.
+
+   BOTH halves of that contract live here: the expressions that read it, and
+   `installer`, the probe that answers them. Rendering is portable; loading the
+   probe off the classpath is not, so only that part is JVM-side."
+  (:require [clojure.string :as str]
+            #?(:clj [clojure.java.io :as io])))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -40,16 +45,37 @@
   (str "(() => { const v = (" source "); return [!!v, v]; })()"))
 
 ;; =============================================================================
-;; The probe contract — @hive-agi/probe
+;; The probe contract — installed by the run, not imported by the app
 ;; =============================================================================
 
 (def probe-key
-  "Global the probe package installs itself under."
+  "Global the injected probe installs itself under, and the only name an
+   application needs to know."
   "__hive__")
 
 (def probe-missing-message
-  (str "hive probe not installed on this page — `npm i -D @hive-agi/probe`, then "
-       "`expose(\"model\", () => yourState)` where the app starts up"))
+  (str "the hive probe was never installed on this page — the browser adapter "
+       "cannot run a document bootstrap script, so :expect-state and "
+       ":wait-for-state have nothing to read. Use :expect-js with your own "
+       "expression instead."))
+
+(def installer
+  "The probe itself — the JavaScript half of this dialect's contract.
+
+   Injected into every document the driven session loads, so an application
+   opts in with one guarded line and no dependency:
+
+     window.__hive__?.expose('model', () => store.getState())
+
+   Shipped as a resource rather than a published npm package: ~90% of it is the
+   READ side, which is this library's contract and not the application's code.
+   Injecting also removes the version skew between shim and runner that a
+   separate package would invite, and means the probe never reaches production.
+
+   A delay on both platforms so callers deref uniformly; only a JVM host has a
+   classpath to read it from."
+  #?(:clj  (delay (slurp (io/resource "hive_cljs/probe.js")))
+     :cljs (delay nil)))
 
 (defn- json-scalar
   [x]
@@ -68,10 +94,12 @@
 (defn read-source
   "JS reading `path` out of the probe's exposed state.
 
-   A missing probe THROWS, naming the fix. An absent probe and a genuinely
-   absent value are different failures — only the second is about the
-   application — and reading `undefined` off a missing global would report them
-   identically."
+   An uninstalled probe THROWS rather than reading `undefined` off a missing
+   global. Three failures have to stay distinguishable, and only one of them is
+   about the application: the probe was never installed (the adapter cannot
+   bootstrap a document), nothing was exposed under that name (a wiring
+   mistake — the probe itself reports this, listing what was), or the value is
+   genuinely absent (an ordinary assertion failure, which reads null)."
   [path]
   (str "(() => { if (!window." probe-key ") throw new Error("
        (pr-str probe-missing-message) "); return window." probe-key ".read("

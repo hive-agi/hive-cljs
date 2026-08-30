@@ -69,7 +69,7 @@ decided by `:hive.cljs/toolchain`:
 |---|---|---|
 | re-frame | `:eval-cljs` `:dispatch` `:expect-sub` `:expect-db` `:wait-for-sub` `:wait-for-db` | a ClojureScript app over the shadow nREPL (`:shadow-cljs`) |
 | JavaScript | `:eval-js` `:expect-js` `:wait-for-js` | **any** app, evaluated in the page (`:browser`, and any driver that can evaluate) |
-| probe | `:expect-state` `:wait-for-state` | any app that installed `@hive-agi/probe` |
+| probe | `:expect-state` `:wait-for-state` | any app that exposes a getter to the injected probe |
 
 A step whose vocabulary the connected channel does not speak reports
 `:incomplete` — never a pass, and never a failure of your application:
@@ -139,14 +139,19 @@ registry, which reading a page does not permit. Declared `:faults` still work.
 ### The probe vocabulary
 
 `:expect-js` works, but every app spells its own state differently, so a suite
-written that way is a pile of per-app expressions. The
-[`@hive-agi/probe`](../probe/) package is one line in the application and gives
-every stack the *same* accessor:
+written that way is a pile of per-app expressions with nothing in common. The
+probe is one accessor every stack shares.
+
+The run **injects** it into every document before the page's own scripts, so the
+application depends on nothing and authors one guarded line:
 
 ```js
-import { expose } from '@hive-agi/probe'
-expose('model', () => store.getState())
+window.__hive__?.expose('model', () => store.getState())
 ```
+
+The `?.` is the whole production story: nothing injects the probe outside a
+scenario, so the line is a no-op and there is no build flag to guard. Getters
+run at read time, once per assertion.
 
 | Step | Reads |
 |---|---|
@@ -162,17 +167,27 @@ This is the counterpart of `:expect-sub` for stacks that are not re-frame — sa
 shape, same debugging property: `:expect-text` red while `:expect-state` green
 localises a bug to rendering rather than to state.
 
-A page with no probe fails with a message naming the fix, rather than reading
-`undefined` — an absent probe and a genuinely absent value are different
-failures, and only the second is about the application. A path that runs off the
-end of the data reads `null`, which is an ordinary assertion failure.
+Three failures that must not be confused, and are not:
 
-Elm keeps no state in JavaScript, so it pushes instead:
+| | reads |
+|---|---|
+| the path runs off the end of the data | `null` — an ordinary assertion failure |
+| nothing was exposed under that name | throws, listing what *was* exposed — a wiring mistake |
+| the probe was never installed | throws, naming the adapter — not about your app at all |
+
+Elm keeps no state in JavaScript, so it pushes instead. `pushed` returns the
+subscriber and exposes the latest value it received — the same shape for a
+websocket or any other push source:
 
 ```js
-import { pushed } from '@hive-agi/probe'
-app.ports.hiveState.subscribe(pushed('model'))
+app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
 ```
+
+Values cross a structured-clone boundary, so they are projected to JSON shapes:
+functions become `"#function"`, DOM nodes `"#node:div"`, `Date`s ISO strings,
+`Map`s objects, `Set`s arrays. Cycles become `"#cycle"` and nesting stops at
+depth 12 — a store graph much larger than the value under test would otherwise
+hang the assertion rather than fail it.
 
 ### Condition-waits on state
 

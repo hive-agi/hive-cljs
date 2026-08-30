@@ -68,6 +68,11 @@
     (swap! state-ref update :marks conj token)
     (r/ok token))
 
+  ports/IPageBootstrap
+  (bootstrap! [_ _session source]
+    (swap! state-ref update :bootstraps conj source)
+    (r/ok :installed))
+
   ports/IPageEval
   (eval-in-page [_ session source]
     (swap! state-ref update :page-evals conj [(:stub-session session) source])
@@ -101,7 +106,7 @@
       {:state :pass :elapsed-ms 1})))
 
 (defn- driver-state []
-  (atom {:sessions 0 :ops [] :closed 0 :marks []
+  (atom {:sessions 0 :ops [] :closed 0 :marks [] :bootstraps []
          :page-evals [] :page-value-fn (constantly true)}))
 
 (defn driver
@@ -121,6 +126,11 @@
   "`[[session-id source] …]` — what was evaluated in which page."
   [stub]
   (:page-evals @(:state-ref stub)))
+
+(defn bootstraps
+  "Document bootstrap sources installed on this driver, in order."
+  [stub]
+  (:bootstraps @(:state-ref stub)))
 
 (defn answering-page
   "Make the driver's page answer `f` (a fn of the source text) for every

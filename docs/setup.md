@@ -335,13 +335,15 @@ This much works with no changes to your application at all.
 
 DOM assertions alone cannot tell "the state is wrong" from "the state is right
 and rendering is wrong" — which is most of what an e2e failure needs to tell you.
-Add the probe:
 
-```bash
-npm i -D @hive-agi/probe
+There is nothing to install. The run injects a probe into every document before
+your scripts run; your app hands it a getter with one guarded line:
+
+```js
+window.__hive__?.expose('model', () => store.getState())
 ```
 
-Elm keeps no state in JavaScript, so send it out through a port:
+Elm keeps no state in JavaScript, so send it out through a port instead:
 
 ```elm
 port hiveState : Encode.Value -> Cmd msg
@@ -351,17 +353,13 @@ update msg model =
 ```
 
 ```js
-import { pushed } from '@hive-agi/probe'
 const app = Elm.Main.init({ node: document.getElementById('root') })
-app.ports.hiveState.subscribe(pushed('model'))
+app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
 ```
 
-For a store-based framework it is one line instead:
-
-```js
-import { expose } from '@hive-agi/probe'
-expose('model', () => store.getState())
-```
+The `?.` is deliberate and is the entire production story: outside a scenario
+nothing injects the probe, so the line is a no-op. No dependency, no build flag,
+nothing shipped to users.
 
 Now both channels are available in one step vector:
 

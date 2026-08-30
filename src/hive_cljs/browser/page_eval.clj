@@ -40,6 +40,7 @@
 
   ports/ISessionBound
   (with-session [this s] (assoc this :session s))
+  (bootstrap-source [_] @js/installer)
 
   ports/IRuntimeDialect
   (assertion-source [_ op] (js/assertion-source op))

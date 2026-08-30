@@ -431,6 +431,22 @@
   [{:keys [driver cljs-eval]}]
   (and (ports/page-marker? driver) (ports/runtime-affinity? cljs-eval)))
 
+(defn- bootstrap-channel!
+  "Install the runtime channel's document bootstrap, before the first op.
+
+   Before, because a contract the application calls into at STARTUP is useless
+   installed after startup — the call would already have run against nothing.
+
+   A failure here is not fatal to the run: only the steps that read through the
+   contract depend on it, and those report the absence themselves. A scenario
+   that never uses them should not be failed by a channel it does not use."
+  [{:keys [driver cljs-eval]} session]
+  (when (and session
+             (ports/session-bound? cljs-eval)
+             (ports/page-bootstrap? driver))
+    (when-let [source (ports/bootstrap-source cljs-eval)]
+      (ports/bootstrap! driver session source))))
+
 (defn- runtime-binding
   "Bind the runtime channel to the driven page, at most once per run.
    Returns nil when bound, or an outcome map when binding failed."
@@ -459,11 +475,11 @@
           :cljs-eval ICljsEval   (required when the plan has runtime ops)}
 
    A runtime channel reaches the driven page one of two ways. An `ISessionBound`
-   channel evaluates INSIDE the session, so it is simply bound to it. An
-   out-of-band channel cannot be bound, so instead the session is stamped and
-   the channel pinned to that stamp — without which the REPL answers from
-   whichever runtime the toolchain happens to pick, and any other open tab
-   silently decides every state assertion.
+   channel evaluates INSIDE the session, so it is bound to it and its document
+   bootstrap installed before the first op. An out-of-band channel cannot be
+   bound, so instead the session is stamped and the channel pinned to that stamp
+   — without which the REPL answers from whichever runtime the toolchain happens
+   to pick, and any other open tab silently decides every state assertion.
 
    With `:app-db-schema` configured, a passing step is re-checked against that
    schema before it counts as green. Steps after the first failure are reported
@@ -488,6 +504,7 @@
                 deps    (cond-> deps
                           (and session (ports/session-bound? (:cljs-eval deps)))
                           (update :cljs-eval ports/with-session session))
+                _       (bootstrap-channel! deps session)
                 token   (when (and session needs-runtime? (affinity-possible? deps))
                           (let [t (str (random-uuid))]
                             (when (r/ok? (ports/mark-session! (:driver deps) session t)) t)))

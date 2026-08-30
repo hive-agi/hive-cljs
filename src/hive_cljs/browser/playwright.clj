@@ -239,6 +239,19 @@
         (r/err :browser/eval-failed
                {:cause (.getMessage e) :source source})))))
 
+(extend-type PlaywrightDriver
+  ports/IPageBootstrap
+  (bootstrap! [_ session source]
+    ;; An init script on the CONTEXT, not an evaluate on the current page: the
+    ;; page is blank at this point and the application does not exist yet. The
+    ;; script has to be waiting when the first :goto loads it, because what it
+    ;; installs is what the app's own startup calls into.
+    (try
+      (.addInitScript ^BrowserContext (:context session) ^String source)
+      (r/ok :installed)
+      (catch Throwable e
+        (r/err :browser/bootstrap-failed {:cause (.getMessage e)})))))
+
 (defn driver
   "Construct the Playwright-backed IBrowserDriver."
   []

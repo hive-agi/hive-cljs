@@ -16,6 +16,7 @@ COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
 DIALECT    dialect/re-frame · dialect/js   (op → source text a runtime evaluates)
+             └ resources/hive_cljs/probe.js — the JS half of dialect/js's contract
 REGISTRY   toolchain (id → IToolchain)     ← the composition root's swap point
 ADAPTERS   shadow/toolchain → IToolchain           (:shadow-cljs)
              ├ shadow/relay → IBuildTool
@@ -118,6 +119,23 @@ They are two protocols rather than one because rendering an assertion and
 rewriting a live handler registry are different powers: a channel may well do
 the first for any application and the second for none.
 
+### Why the probe is injected, not published
+
+`dialect/js` owns both halves of the `:expect-state` contract: the expressions
+that read it, and `resources/hive_cljs/probe.js`, which answers them.
+`ISessionBound/bootstrap-source` hands that to the boundary, `IPageBootstrap`
+installs it as a document init script before the first op — before, because a
+contract the application calls into at *startup* is useless installed after
+startup.
+
+It was briefly an npm package. Measuring it settled the question: ~90% of it is
+the READ side, which is this library's contract and not the application's code.
+The application's whole share is one guarded line —
+`window.__hive__?.expose('model', () => …)` — which does not justify a
+dependency, and injecting instead means there is no version skew between shim
+and runner, the classic failure mode of a test-shim package. The probe also
+never reaches production, so no build flag guards it.
+
 `dialect_test.clj` carries a guard that `boundary` requires no namespace under
 `hive-cljs.shadow` or `hive-cljs.browser` — the require that used to break that
 looked entirely reasonable at the call site.
@@ -198,7 +216,8 @@ Every test injects a stub through the ports — `StubBuildTool` (with
 suite runs with nothing installed:
 
 ```bash
-clojure -M:test    # 308 tests, 1128 assertions
+clojure -M:test          # 311 tests, 1137 assertions
+node test/js/probe_test.mjs   # 31 — the injected probe, which Clojure cannot exercise
 ```
 
 `defscenarios` is tested by expanding it against real temp project trees and

@@ -74,6 +74,16 @@
      {:value <data> :printed str}. Host collections arrive as Clojure data, so a
      JavaScript array reads back as a vector."))
 
+(defprotocol IPageBootstrap
+  "Optional: run source in every document a session loads, before page scripts.
+
+   Must survive navigation and must land BEFORE the application starts — a
+   contract the app is expected to call into at startup is useless if it is
+   installed after startup."
+
+  (bootstrap! [this session source]
+    "Install `source` for every document `session` loads. Returns a Result."))
+
 ;; =============================================================================
 ;; ICljsEval — the runtime channel
 ;; =============================================================================
@@ -160,7 +170,15 @@
 
   (with-session [this session]
     "Return a channel bound to `session`. The receiver is left unchanged, so one
-     channel value serves every run."))
+     channel value serves every run.")
+
+  (bootstrap-source [this]
+    "Source this channel needs run in every document BEFORE the page's own
+     scripts, or nil when it needs none.
+
+     The channel owns its contract, so the boundary can install it without
+     knowing what it says — and an application wires itself to that contract
+     with a guarded one-liner rather than a dependency."))
 
 ;; =============================================================================
 ;; IToolchain — how one frontend stack's channels are opened and released
@@ -205,5 +223,7 @@
 
 (defn page-eval? [x] (satisfies? IPageEval x))
 (defn session-bound? [x] (satisfies? ISessionBound x))
+
+(defn page-bootstrap? [x] (satisfies? IPageBootstrap x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))

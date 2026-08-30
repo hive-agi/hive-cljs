@@ -62,14 +62,42 @@
     (testing "and a pass reports the value rather than a bare true"
       (is (str/includes? src "? v : false")))))
 
-(deftest a-missing-probe-is-a-different-failure-from-a-missing-value
-  ;; Reading undefined off an absent global would report 'the app does not have
-  ;; this' when the truth is 'nobody installed the probe'. Only one of those is
-  ;; about the application.
+(deftest the-probe-is-installed-before-the-first-step-not-imported-by-the-app
+  ;; The contract the application calls into at startup has to be waiting when
+  ;; the first :goto loads it — installed after startup, the app's own
+  ;; expose(...) call would already have run against nothing.
+  (let [[res driver] (run [[:goto "/"] [:expect-state ["model"] "v"]] (constantly true))]
+    (is (r/ok? res))
+    (let [[src] (stub/bootstraps driver)]
+      (is (some? src) "the run installs the probe itself; the app imports nothing")
+      (is (str/includes? src "window.__hive__"))
+      (is (str/includes? src "expose:")))))
+
+(deftest a-driver-that-cannot-bootstrap-explains-the-absent-probe
+  ;; Not "the value is missing" — the contract was never installed, and only one
+  ;; of those is about the application.
   (let [src (js/assertion-source (op :expect-state ["model"] "v"))]
     (is (str/includes? src "if (!window.__hive__) throw new Error"))
-    (is (str/includes? src "@hive-agi/probe")
-        "the error names the fix")))
+    (is (str/includes? src "never installed"))
+    (is (str/includes? src ":expect-js")
+        "and points at the vocabulary that needs no probe")))
+
+(deftest the-installed-probe-is-the-shipped-resource
+  ;; The JS and the expressions that read it are one contract in one namespace;
+  ;; a channel inventing its own would drift from the reader silently.
+  (let [src (ports/bootstrap-source (page-eval/channel (stub/driver)))]
+    (is (= @js/installer src))
+    (is (str/includes? src "pushed:") "the Elm push path ships with it")))
+
+(deftest a-driver-that-cannot-bootstrap-does-not-fail-a-run-that-never-reads-state
+  ;; driver-without-marking carries no IPageBootstrap. A scenario using only
+  ;; browser steps must not be failed by a channel it does not use.
+  (let [driver (stub/driver-without-marking)
+        deps   {:driver driver :cljs-eval (page-eval/channel driver)}
+        p      (plan/build-plan fix/manifest {:id :dom-only :steps [[:goto "/"]]})
+        res    (boundary/run-plan! deps (:ok p))]
+    (is (r/ok? res))
+    (is (verdict/run-ok? (:ok res)))))
 
 (deftest a-path-segment-may-be-a-keyword-or-an-index
   (is (= "[\"model\",\"items\",0,\"id\"]"
