@@ -114,6 +114,22 @@ coerced to a long, so `:port` type-checks without a wrapper.
 
 ## Sections
 
+### `:hive.cljs/toolchain` — who opens the build and runtime channels
+
+```clojure
+{:hive.cljs/toolchain :shadow-cljs}   ; default — omit and nothing changes
+```
+
+Selects the `IToolchain` that connects this project's build tool and runtime
+eval channel. `:shadow-cljs` ships; anything else must have been registered with
+`hive-cljs.toolchain/register!` before a session opens. An id nobody registered
+is reported by `doctor` as `:toolchain/unknown` with the known ids listed, and
+the build and runtime channels read `:down` for that reason rather than for a
+connectivity one.
+
+The browser channel is not affected: it drives a page, and a page is a page
+whatever compiled it.
+
 ### `:hive.cljs/shadow` — connectivity
 
 ```clojure
@@ -257,6 +273,7 @@ A run that measured nothing is `:unavailable`, never a pass.
 
 | Key | Default |
 |---|---|
+| `toolchain` | `:shadow-cljs` |
 | `shadow :host` / `:port` | `"localhost"` / `9630` |
 | `shadow :nrepl-port` | none — runtime channel disabled |
 | `e2e :base-url` | `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |

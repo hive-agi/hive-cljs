@@ -15,12 +15,18 @@ PROMOTE    verdict   (raw payload → verdict / report)
 COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
-ADAPTERS   shadow/relay → IBuildTool     shadow/nrepl → ICljsEval
+REGISTRY   toolchain (id → IToolchain)   ← the composition root's swap point
+ADAPTERS   shadow/toolchain → IToolchain
+             ├ shadow/relay → IBuildTool
+             └ shadow/nrepl → ICljsEval
            browser/playwright → IBrowserDriver
 ```
 
 A vendor is named **only** in an adapter namespace. Everything above depends on
-`hive-cljs.ports`.
+`hive-cljs.ports`. That includes `system`, the composition root — it resolves a
+project's declared toolchain through the registry rather than calling a
+connector by name, which is what makes the extension points below reachable at
+all rather than merely declared.
 
 ## The three ports
 
@@ -38,6 +44,44 @@ A vendor is named **only** in an adapter namespace. Everything above depends on
 
 `ICljsEval` is what makes this more than a Playwright wrapper — it lets one
 scenario assert on the DOM and on live re-frame state.
+
+## The toolchain seam
+
+The three ports say *what* a channel does. `IToolchain` says who opens it:
+
+```clojure
+(defprotocol IToolchain
+  (open-build-tool [this manifest]) (open-runtime [this manifest])
+  (close-build-tool! [this build-tool]) (close-runtime! [this runtime]))
+```
+
+`system/open!` resolves `:manifest/toolchain` — `:hive.cljs/toolchain` in
+config, defaulting to `:shadow-cljs` — through `hive-cljs.toolchain` and asks the
+result for both channels. So a stack this library has never heard of is mounted
+with a `register!`:
+
+```clojure
+(toolchain/register! :my-stack (reify ports/IToolchain …))
+;; or a symbol, resolved on first use
+(toolchain/register! :my-stack 'my.ns/toolchain)
+```
+
+Teardown lives on `IToolchain` rather than on the ports because adding a method
+to a shipped port protocol would break every third-party implementation of it.
+
+Two properties the registry is built to keep:
+
+- **Nothing loads a vendor to know it exists.** A shipped adapter is registered
+  as a symbol and `requiring-resolve`d on first use — the same soft resolution
+  `browser.factory` uses — so the subsystem loads and tests with none of its
+  vendors on the classpath, and a missing one is a typed error at open time.
+- **An unresolvable toolchain explains both dead channels.** `doctor` reports it
+  under `:ports {:toolchain :down}` and repeats the error as the reason for the
+  build and runtime channels, rather than showing two unexplained absences that
+  send the reader hunting for a server that was never the problem.
+
+The browser is deliberately *not* behind this: `IBrowserDriver` is already stack
+agnostic — it drives a page, and a page is a page whatever compiled it.
 
 ## The optional capabilities
 
@@ -150,7 +194,8 @@ a `:rel` restating the decision.
 | Want to | Do |
 |---|---|
 | add a step kind | append an `IStepRule` (+ a `perform-op` defmethod for browser kinds) |
-| support another build tool | implement `IBuildTool`, register a relay profile |
+| support another frontend stack | implement `IToolchain`, `toolchain/register!` it, declare `:hive.cljs/toolchain` |
+| support another build tool | implement `IBuildTool`, return it from a toolchain's `open-build-tool` |
 | swap the browser | implement `IBrowserDriver` (+ `IPageMarker` to keep runtime pinning) |
-| swap the runtime channel | implement `ICljsEval` (+ `IRuntimeAffinity` to keep runtime pinning, `IRuntimeInventory` to keep doctor's runtime report) |
+| swap the runtime channel | implement `ICljsEval` and return it from a toolchain's `open-runtime` (+ `IRuntimeAffinity` to keep runtime pinning, `IRuntimeInventory` to keep doctor's runtime report) |
 | change what a build event triggers | add a `:hive.cljs/watch` action and a `watch/action->decision` case |

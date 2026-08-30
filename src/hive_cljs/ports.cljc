@@ -101,6 +101,33 @@
      evaluation still goes to the toolchain's own choice."))
 
 ;; =============================================================================
+;; IToolchain — how one frontend stack's channels are opened and released
+;; =============================================================================
+
+(defprotocol IToolchain
+  "Open and release the channels of ONE frontend toolchain.
+
+   The composition root resolves a manifest's declared toolchain to an
+   implementation and asks it for the ports, so mounting a stack this library
+   has never heard of is a registration rather than an edit to the wiring.
+
+   Teardown lives here rather than on the ports themselves because adding a
+   method to a shipped port protocol would break every third-party
+   implementation of it."
+
+  (open-build-tool [this manifest]
+    "Return a Result of a connected `IBuildTool` for `manifest`.")
+
+  (open-runtime [this manifest]
+    "Return a Result of an `ICljsEval` for `manifest`.")
+
+  (close-build-tool! [this build-tool]
+    "Release a build tool this toolchain opened. Idempotent; never throws.")
+
+  (close-runtime! [this runtime]
+    "Release a runtime channel this toolchain opened. Idempotent; never throws."))
+
+;; =============================================================================
 ;; Predicates
 ;; =============================================================================
 
@@ -110,3 +137,5 @@
 (defn page-marker? [x] (satisfies? IPageMarker x))
 (defn runtime-affinity? [x] (satisfies? IRuntimeAffinity x))
 (defn runtime-inventory? [x] (satisfies? IRuntimeInventory x))
+
+(defn toolchain? [x] (satisfies? IToolchain x))

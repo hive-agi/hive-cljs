@@ -6,11 +6,10 @@
   (:require [hive-cljs.boundary :as boundary]
             [hive-cljs.browser.factory :as browser]
             [hive-cljs.ports :as ports]
-            [hive-cljs.shadow.nrepl :as shadow-nrepl]
-            [hive-cljs.shadow.relay :as relay]
             [hive-dsl.result :as r]
             [taoensso.timbre :as log]
-            [hive-cljs.staleness :as staleness]))
+            [hive-cljs.staleness :as staleness]
+            [hive-cljs.toolchain :as toolchain]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -18,43 +17,37 @@
 
 (defonce ^:private sessions (atom {}))
 
-(def ^:private handshake-timeout-ms 5000)
-
-(defn- connect-build-tool
-  [manifest]
-  (let [conn (:manifest/shadow manifest)]
-    (r/bind (relay/connect! conn)
-            #(relay/await-ready! % handshake-timeout-ms))))
-
-(defn- connect-cljs-eval
-  [manifest]
-  (let [conn (:manifest/shadow manifest)]
-    (if (shadow-nrepl/blank-port? conn)
-      (r/err :cljs-eval/no-nrepl-port {})
-      (shadow-nrepl/connect! conn))))
-
 (defn open!
-  "Build a session for `root`: manifest + whichever ports connect.
+  "Build a session for `root`: manifest + whichever ports its toolchain connects.
 
    Returns a Result of
-   {:manifest … :sources … :build-tool … :cljs-eval … :driver … :errors {port err}}"
+   {:manifest … :toolchain … :sources … :build-tool … :cljs-eval … :driver …
+    :errors {port err}}
+
+   An unresolvable toolchain is reported as the reason BOTH channels are down,
+   rather than two unexplained absences."
   [root]
   (r/bind
    (boundary/load-manifest root)
    (fn [manifest]
-     (let [bt      (connect-build-tool manifest)
-           ce      (connect-cljs-eval manifest)
+     (let [tc-res  (toolchain/resolve-toolchain (:manifest/toolchain manifest))
+           tc      (when (r/ok? tc-res) (:ok tc-res))
+           bt      (if tc (ports/open-build-tool tc manifest) tc-res)
+           ce      (if tc (ports/open-runtime tc manifest) tc-res)
            drv     (browser/driver)
-           session {:root       (str root)
-                    :manifest   manifest
-                    :sources    (boundary/source-stamps (:manifest/sources manifest))
-                    :build-tool (when (r/ok? bt) (:ok bt))
-                    :cljs-eval  (when (r/ok? ce) (:ok ce))
-                    :driver     (when (r/ok? drv) (:ok drv))
-                    :errors     (cond-> {}
-                                  (r/err? bt)  (assoc :build-tool bt)
-                                  (r/err? ce)  (assoc :cljs-eval ce)
-                                  (r/err? drv) (assoc :driver drv))}]
+           session {:root          (str root)
+                    :manifest      manifest
+                    :toolchain-id  (:manifest/toolchain manifest)
+                    :toolchain     tc
+                    :sources       (boundary/source-stamps (:manifest/sources manifest))
+                    :build-tool    (when (r/ok? bt) (:ok bt))
+                    :cljs-eval     (when (r/ok? ce) (:ok ce))
+                    :driver        (when (r/ok? drv) (:ok drv))
+                    :errors        (cond-> {}
+                                     (r/err? tc-res) (assoc :toolchain tc-res)
+                                     (r/err? bt)     (assoc :build-tool bt)
+                                     (r/err? ce)     (assoc :cljs-eval ce)
+                                     (r/err? drv)    (assoc :driver drv))}]
        (swap! sessions assoc (str root) session)
        (r/ok session)))))
 
@@ -69,11 +62,18 @@
   (staleness/sources-changed? (:sources s) (current-stamps s)))
 
 (defn close!
-  "Release a session's ports. Idempotent."
+  "Release a session's ports through the toolchain that opened them. Idempotent.
+
+   A third-party adapter is contracted never to throw here, but one that does
+   must not strand the session or abort `close-all!` — so each teardown is
+   guarded."
   [root]
   (when-let [s (get @sessions (str root))]
-    (when-let [bt (:build-tool s)] (try (relay/disconnect! bt) (catch Exception _ nil)))
-    (when-let [ce (:cljs-eval s)] (try (shadow-nrepl/disconnect! ce) (catch Exception _ nil)))
+    (when-let [tc (:toolchain s)]
+      (when-let [bt (:build-tool s)]
+        (try (ports/close-build-tool! tc bt) (catch Throwable _ nil)))
+      (when-let [ce (:cljs-eval s)]
+        (try (ports/close-runtime! tc ce) (catch Throwable _ nil))))
     (swap! sessions dissoc (str root)))
   (r/ok :closed))
 
@@ -99,7 +99,8 @@
 (defn health
   "Per-port availability for a session."
   [session]
-  {:build-tool (if (:build-tool session) :ok :down)
+  {:toolchain  (if (:toolchain session) :ok :down)
+   :build-tool (if (:build-tool session) :ok :down)
    :cljs-eval  (if (:cljs-eval session) :ok :down)
    :browser    (if (:driver session) :ok :down)
    :errors     (into {} (map (fn [[k v]] [k (:error v)])) (:errors session))})
@@ -184,6 +185,7 @@
         (r/ok {:manifest        :ok
                :root            (:manifest/root m)
                :invoked-from    (:root s)
+               :toolchain       (:manifest/toolchain m)
                :sources         (vec (:manifest/sources m))
                :shadow          shadow
                :builds          declared

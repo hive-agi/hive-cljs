@@ -44,6 +44,15 @@
    [:port Port]
    [:nrepl-port {:optional true} Port]])
 
+(def ToolchainId
+  "Which frontend toolchain opens this project's build and runtime channels.
+
+   Open by construction: the set of toolchains is a registry, so any keyword is
+   well-formed here and an unregistered one fails at open time with the known
+   ids listed — rather than a closed enum this library would have to edit to
+   admit a stack it has never heard of."
+  :keyword)
+
 (def BrowserEngine
   [:enum :chromium :firefox :webkit])
 
@@ -180,6 +189,7 @@
 (def RawManifest
   "Project-authored `hive-cljs.edn` before normalization."
   [:map
+   [:hive.cljs/toolchain {:optional true} :keyword]
    [:hive.cljs/shadow {:optional true} [:map-of :keyword :any]]
    [:hive.cljs/builds {:optional true} [:map-of :keyword :any]]
    [:hive.cljs/e2e {:optional true} [:map-of :keyword :any]]
@@ -411,6 +421,7 @@
   [:map {:closed true}
    [:manifest/root NonBlankString]
    [:manifest/sources {:optional true} [:vector NonBlankString]]
+   [:manifest/toolchain ToolchainId]
    [:manifest/shadow ShadowConfig]
    [:manifest/builds [:map-of BuildId BuildSpec]]
    [:manifest/e2e E2eConfig]

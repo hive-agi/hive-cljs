@@ -174,3 +174,36 @@
 (defn marks [stub] (:marks @(:state-ref stub)))
 
 (defn evals [stub] (:evals @(:state-ref stub)))
+
+;; =============================================================================
+;; IToolchain
+;; =============================================================================
+
+(defrecord StubToolchain [state-ref]
+  ports/IToolchain
+
+  (open-build-tool [_ manifest]
+    (swap! state-ref update :opened conj [:build-tool (:manifest/root manifest)])
+    (or (:build-tool-result @state-ref) (r/ok (:build-tool @state-ref))))
+
+  (open-runtime [_ manifest]
+    (swap! state-ref update :opened conj [:runtime (:manifest/root manifest)])
+    (or (:runtime-result @state-ref) (r/ok (:runtime @state-ref))))
+
+  (close-build-tool! [_ _] (swap! state-ref update :closed conj :build-tool) nil)
+  (close-runtime! [_ _] (swap! state-ref update :closed conj :runtime) nil))
+
+(defn toolchain
+  "A toolchain whose channels are the stubs above, recording what it opened and
+   released. Pass :build-tool-result / :runtime-result to model a channel that
+   refuses to connect."
+  ([] (toolchain {}))
+  ([opts]
+   (->StubToolchain (atom (merge {:build-tool (build-tool)
+                                  :runtime    (cljs-eval)
+                                  :opened     []
+                                  :closed     []}
+                                 opts)))))
+
+(defn opened [stub] (:opened @(:state-ref stub)))
+(defn released [stub] (:closed @(:state-ref stub)))

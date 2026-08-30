@@ -59,6 +59,11 @@
   (boolean (seq (dissoc raw inherit-key))))
 
 (def default-shadow  {:host "localhost" :port 9630})
+
+(def default-toolchain
+  "Toolchain assumed when a project declares none — the historical behaviour,
+   so an existing config keeps working unchanged."
+  :shadow-cljs)
 (def default-e2e     {:browser :chromium :headless true :timeout-ms 15000 :poll-ms 250})
 (def default-watch   {:on-build-success [] :on-build-failure [] :debounce-ms 500})
 (def default-artifacts-dir ".hive-cljs/artifacts")
@@ -71,6 +76,11 @@
   "Resolve shadow connectivity defaults."
   [raw]
   (merge default-shadow (select-keys (or raw {}) [:host :port :nrepl-port])))
+
+(defn normalize-toolchain
+  "Which toolchain opens this project's build and runtime channels."
+  [raw]
+  (or raw default-toolchain))
 
 (defn normalize-build
   "Resolve one build spec; `id` supplies :shadow/id when absent."
@@ -180,11 +190,12 @@
   [raw root]
   (let [builds   (normalize-builds (:hive.cljs/builds raw))
         coverage (normalize-coverage (:hive.cljs/coverage raw))]
-    (cond-> {:manifest/root   root
-             :manifest/shadow (normalize-shadow (:hive.cljs/shadow raw))
-             :manifest/builds builds
-             :manifest/e2e    (normalize-e2e (:hive.cljs/e2e raw) builds root)
-             :manifest/watch  (normalize-watch (:hive.cljs/watch raw))}
+    (cond-> {:manifest/root      root
+             :manifest/toolchain (normalize-toolchain (:hive.cljs/toolchain raw))
+             :manifest/shadow    (normalize-shadow (:hive.cljs/shadow raw))
+             :manifest/builds    builds
+             :manifest/e2e       (normalize-e2e (:hive.cljs/e2e raw) builds root)
+             :manifest/watch     (normalize-watch (:hive.cljs/watch raw))}
       coverage (assoc :manifest/coverage coverage))))
 
 (defn validate
@@ -263,6 +274,8 @@
 ;; =============================================================================
 
 (m/=> normalize-shadow [:=> [:cat [:maybe [:map-of :keyword :any]]] s/ShadowConfig])
+
+(m/=> normalize-toolchain [:=> [:cat :any] s/ToolchainId])
 (m/=> normalize-builds [:=> [:cat [:maybe [:map-of :keyword :any]]]
                         [:map-of s/BuildId s/BuildSpec]])
 (m/=> normalize-action [:=> [:cat :any] s/WatchAction])
