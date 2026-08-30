@@ -8,7 +8,7 @@ consolidated `code` tool — `code cljs status`, `code cljs e2e run`, and so on.
 One line in the coordinator's untracked `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.1.3"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.2.6"}
 ```
 
 Published to Clojars, so nothing needs to be checked out. When hacking on
@@ -19,6 +19,12 @@ Restart. That is the whole host-side change.
 **Batteries included.** Every vendor hive-cljs needs — shadow relay transport,
 nREPL client, and the Playwright browser driver — rides in on its own `:deps`.
 The host never declares an addon's vendors.
+
+That extends to the projects it drives. A non-ClojureScript project adds no
+dependency of its own either: the probe backing `:expect-state` ships as a
+resource in this jar and is injected into the page at run time, so an Elm or
+React team installs nothing at all. See
+[architecture.md](architecture.md#why-the-probe-is-injected-not-published).
 
 This is why the browser driver is a base dep rather than an `:browser` alias:
 **tools.deps aliases do not propagate to a consumer.** A host that mounts the

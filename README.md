@@ -10,58 +10,98 @@
 <!-- /hive-badges -->
 
 Frontend development as a hive IAddon: **build status, runtime eval, Playwright
-e2e scenarios, per-namespace coverage and build→e2e watching**, driven by config
-in your project root.
+e2e scenarios, coverage and build→e2e watching**, driven by config in your
+project root.
 
-ClojureScript gets the deepest integration — shadow-cljs build supervision and
-re-frame state assertions. **Any other stack** — Elm, React, Svelte, Vue, plain
-JavaScript — gets the same scenario vocabulary with
-`:hive.cljs/toolchain :browser`, where state assertions are evaluated in the page
-itself. See [the two runtime vocabularies](docs/steps.md#runtime-steps).
+Works with **any frontend stack**. ClojureScript gets the deepest integration —
+shadow-cljs build supervision, re-frame state assertions, per-namespace coverage.
+Elm, React, Svelte, Vue and hand-written JavaScript get the same scenario
+vocabulary, the same reports and the same tool surface.
 
 One addon. One `cljs` subdomain on the `code` tool. Three ports.
 
-Runtime assertions are pinned to the page the scenario drives, and a step that
-could not be attempted is `:incomplete` — never a silent pass.
+A step that could not be attempted is `:incomplete` — never a silent pass.
+
+## Why not just a browser driver
+
+A scenario asserts on the **DOM and on what the application believes, in the same
+step vector**:
+
+```clojure
+[[:goto "/inbox"]
+ [:click "#refresh"]
+ [:wait-for-state ["model" "loading"] "v === false"]
+ [:expect-state  ["model" "items" "length"] "v === 3"]   ; state
+ [:expect-text   "#count" "3 messages"]]                  ; rendering
+```
+
+That split is a debugging instrument. `:expect-text` red while `:expect-state`
+green localises a bug to **rendering**; both red points at **state**. A suite
+that only reads the DOM cannot tell you which.
+
+The same scenario in a ClojureScript project reads the live re-frame runtime
+instead, over shadow's nREPL:
+
+```clojure
+[[:goto "/"]
+ [:click "#go"]
+ [:expect-text "#hi" "Hello, pedro"]      ; browser → IBrowserDriver
+ [:expect-sub [:current-user] "some?"]    ; runtime → ICljsEval
+ [:expect-db  [:user] "some?"]]
+```
+
+Both are the same machinery. What differs is only the **runtime vocabulary** —
+see [the three vocabularies](docs/steps.md#runtime-steps).
 
 ## Documentation
 
 | | |
 |---|---|
-| **[Setting up a fresh project](docs/setup.md)** | nothing → a green scenario, with the traps that cost real time |
+| **[Setting up a project](docs/setup.md)** | nothing → a green scenario, ClojureScript or otherwise, with the traps that cost real time |
 | **[Configuration reference](docs/configuration.md)** | `.hive-project.edn` vs `hive-cljs.edn`, every key, every default |
-| **[Step reference](docs/steps.md)** | the browser + runtime vocabulary, semantics, adding a kind |
+| **[Step reference](docs/steps.md)** | the browser + runtime vocabularies, semantics, adding a kind |
 | **[Mounting in a host](docs/hosting.md)** | wiring into hive-mcp, why a subdomain, diagnosing a silent mount |
-| **[Architecture](docs/architecture.md)** | CPPB layers, the ports, extension points |
+| **[Architecture](docs/architecture.md)** | CPPB layers, the ports, the toolchain and dialect seams, extension points |
 | **[Runnable example](example/)** | a wired shadow-cljs + re-frame app you can `cljs e2e run` against |
 
-## Why not just a build-status tool
+## Quick start
 
-A scenario asserts on the **DOM and the live re-frame runtime in the same step
-vector**:
+Pick a toolchain. It decides who opens the build and runtime channels; the
+browser channel is the same either way.
+
+### Any stack — Elm, React, Svelte, Vue, plain JS
 
 ```clojure
-[[:goto "/"]
- [:click "#go"]
- [:expect-text "#hi" "Hello, pedro"]      ; browser  → IBrowserDriver
- [:expect-sub [:current-user] "some?"]    ; runtime  → ICljsEval
- [:expect-db  [:user] "some?"]]
+;; hive-cljs.edn
+{:hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 8000
+                          :command ["elm" "make" "src/Main.elm"
+                                    "--output=public/app.js"]}}
+ :hive.cljs/e2e {:scenarios [{:id :smoke :steps [[:goto "/"]
+                                                 [:expect-text "h1" "Inbox"]]}]}}
 ```
 
-`:expect-sub` / `:expect-db` / `:dispatch` / `:eval-cljs` are evaluated **inside
-the running application** over shadow's nREPL. Everything else drives a real
-browser.
+Serve the app, and DOM scenarios work with **no changes to your application**.
 
-That split is also a debugging instrument: `:expect-text` red while `:expect-sub`
-green localises a bug to rendering rather than state.
+To assert on state, hand the probe a getter. There is nothing to install — the
+run injects it into every document before your scripts:
 
-For that reading to be trustworthy the runtime assertion has to be about the page
-the scenario is driving — so hive-cljs stamps the page it opens and pins
-evaluation to it. Otherwise any other connected runtime (a stray tab, a forgotten
-headless browser, the shadow UI) answers instead, and the scenario grades the
-wrong page while reporting green.
+```js
+window.__hive__?.expose('model', () => store.getState())
+```
 
-## Quick start
+The `?.` is the whole production story: outside a scenario nothing injects the
+probe, so the line is a no-op. No dependency, no build flag, nothing shipped to
+users. Elm pushes instead, through a port:
+
+```js
+app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
+```
+
+`:command` is optional — without it scenarios still run, you just get no build
+verdict.
+
+### ClojureScript
 
 `shadow-cljs.edn` supplies the two ports:
 
@@ -80,35 +120,35 @@ Config — in your existing `.hive-project.edn`:
               :builds {:app {:http-port 8280}}}}
 ```
 
-…or in a standalone `hive-cljs.edn`. Both work; both together merge, with the
-dedicated file winning. A single build id is the only required key.
+`:hive.cljs/toolchain` defaults to `:shadow-cljs`, so this needs no toolchain
+key. A single build id is the only required config.
 
-Either file is found by walking **up** from wherever you invoked, so a
-subdirectory works. A workspace can hold shared defaults, but a child inherits
-them only by asking: `:hive.cljs/inherit true`. Values can come from the
-environment with `#hive/env PORT`.
+### Either way
 
-Then, with `shadow-cljs watch app` running:
+Config may live in `.hive-project.edn` or a standalone `hive-cljs.edn`. Both
+work; both together merge, with the dedicated file winning. Either is found by
+walking **up** from wherever you invoked, so a subdirectory works. A workspace
+can hold shared defaults, but a child inherits them only by asking:
+`:hive.cljs/inherit true`. Values can come from the environment with
+`#hive/env PORT`.
 
 ```clojure
 code {command: "cljs doctor",  directory: "/path/to/my-app"}
-code {command: "cljs e2e run", directory: "/path/to/my-app", scenario: "login"}
+code {command: "cljs e2e run", directory: "/path/to/my-app", scenario: "smoke"}
 code {command: "cljs watch start", directory: "/path/to/my-app"}
 ```
 
-Full walkthrough: **[docs/setup.md](docs/setup.md)**. Working code to copy from:
-**[example/](example/)** — both config sources, both assertion channels, the
-input vocabulary and the watcher, in one small app.
+Full walkthrough: **[docs/setup.md](docs/setup.md)**.
 
 ## Tool surface
 
 | Subcommand | Does |
 |---|---|
-| `cljs doctor` | validate config, report per-port connectivity and which runtimes are attached |
+| `cljs doctor` | validate config, report the toolchain, per-port connectivity and which runtimes are attached |
 | `cljs staleness` | three axes: cached config vs disk, declared vs served builds, emitted bundle vs source |
 | `cljs status [build]` | build verdict — one build or all |
 | `cljs compile <build>` | one compile cycle, returns the verdict |
-| `cljs eval <build> <code>` | evaluate cljs in the running runtime |
+| `cljs eval <build> <code>` | evaluate in the running runtime |
 | `cljs e2e list \| run` | run a scenario (`scenario`) or a tag set (`tags`) |
 | `cljs e2e run-all` | fan the same run out over every descendant project that authors config |
 | `cljs e2e mutate` | inject faults and report the ones no scenario killed |
@@ -118,6 +158,12 @@ input vocabulary and the watcher, in one small app.
 | `cljs help` | subcommand index |
 
 All accept `directory` (project root; defaults to cwd).
+
+Three of these are ClojureScript-only, and say so rather than pretending:
+`cljs coverage` (see below), the `:app-db-schema` invariant, and `e2e mutate`'s
+`--auto` fault derivation. All three mean reading or rewriting the application's
+own handler registry, which reading a page does not permit. Declared `:faults`
+still work everywhere.
 
 ## Coverage, in ClojureScript terms
 
@@ -148,8 +194,8 @@ A run that measured nothing is `:unavailable`, never a pass.
 
 | The lie | The answer |
 |---|---|
-| a fixed `[:wait-ms 2500]` that passes warm and fails cold | `[:wait-for-sub [:selected] "some?"]` — poll the state, and report the last value seen on timeout |
-| every assertion green while app-db quietly rots around them | `:app-db-schema` — a malli schema asserted between steps, so a scenario also proves the state stayed well-formed |
+| a fixed `[:wait-ms 2500]` that passes warm and fails cold | `[:wait-for-state …]` / `[:wait-for-sub …]` — poll the state, and report the last value seen on timeout |
+| every assertion green while app state quietly rots around them | `:app-db-schema` — a malli schema asserted between steps, so a scenario also proves the state stayed well-formed |
 | a green suite that no bug can turn red | `cljs e2e mutate` — break the live app on purpose; a fault nothing kills is a hole in the suite |
 
 The last one is the JVM trifecta's missing half: `hive-schemas.test` mutates
@@ -182,7 +228,7 @@ Same execution path as the tool and the watcher. See
 One line in the host's `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.1.3"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.2.6"}
 ```
 
 …or, when hacking on hive-cljs itself, `#:local{:root "../hive-cljs"}`.
@@ -193,15 +239,27 @@ Details and the reasoning: [docs/hosting.md](docs/hosting.md).
 
 ## Requirements
 
-- a running shadow-cljs server (`shadow-cljs watch <build>`) for build status and e2e
-- `:nrepl-port` in the config for the runtime channel, plus a browser with the app
-  open so a JS runtime is connected — a scenario's `:goto` handles that itself
+**Any stack** (`:hive.cljs/toolchain :browser`)
+
+- your app served somewhere, and its port in `:http-port`
+- a `:command` on the build, if you want a build verdict
+- nothing installed in the application; the probe is injected
+
+**ClojureScript** (`:shadow-cljs`, the default)
+
+- a running shadow-cljs server (`shadow-cljs watch <build>`) for build status
+- `:nrepl-port` in the config for the runtime channel, plus a browser with the
+  app open so a JS runtime is connected — a scenario's `:goto` handles that
 
 ## Testing
 
 ```bash
-clojure -M:test    # 181 tests, 727 assertions — stubs only, no vendors needed
+clojure -M:test               # 311 tests, 1137 assertions — stubs only, no vendors needed
+node test/js/probe_test.mjs   # 31 — the injected probe, which Clojure cannot exercise
 ```
+
+No test namespace names a vendor: every test injects a stub through the ports,
+so the suite runs with nothing installed.
 
 ## License
 

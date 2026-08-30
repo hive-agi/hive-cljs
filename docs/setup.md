@@ -1,15 +1,19 @@
-# Setting up a fresh ClojureScript project
+# Setup
 
 From nothing to a green end-to-end scenario. Assumes hive-cljs is already mounted
 in your hive-mcp coordinator — if it isn't, see [hosting.md](hosting.md).
 
+Two walkthroughs, because the wiring differs and nothing else does:
+
+| Your project | Go to |
+|---|---|
+| ClojureScript + shadow-cljs | [1. A minimal shadow-cljs project](#1-a-minimal-shadow-cljs-project), below |
+| Elm, React, Svelte, Vue, plain JS | [Any other stack](#any-other-stack--elm-react-svelte-vue) — shorter, because there is no build server to wire up |
+
 Everything below was executed while building this library; the numbers and error
 strings are real. If you would rather start from something that already runs,
-[`example/`](../example/) is this walkthrough's end state, committed.
-
-> **Not a ClojureScript project?** Skip to
-> [Any other stack](#any-other-stack--elm-react-svelte-vue) at the bottom — it is
-> shorter, because there is no build server to wire up.
+[`example/`](../example/) is the ClojureScript walkthrough's end state,
+committed.
 
 ## 1. A minimal shadow-cljs project
 
