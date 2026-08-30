@@ -14,7 +14,8 @@
             [hive-cljs.mutation :as mutation]
             [clojure.data.json :as json]
             [hive-cljs.coverage :as coverage]
-            [clojure.walk :as walk])
+            [clojure.walk :as walk]
+            [hive-cljs.step :as step])
   (:import [java.io PushbackReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -271,8 +272,11 @@
 ;; =============================================================================
 
 (def wait-kinds
-  "Runtime steps that poll a condition instead of asserting it once."
-  #{:wait-for-sub :wait-for-db})
+  "Runtime steps that poll a condition instead of asserting it once.
+
+   Defined by the step vocabulary, not here: a new stack's kinds must not need
+   an edit to the boundary."
+  step/poll-kinds)
 
 (defn wait-op? [op] (contains? wait-kinds (:op/kind op)))
 
@@ -328,7 +332,7 @@
 
 (defn- assertion-op?
   [op]
-  (contains? #{:expect-sub :expect-db} (:op/kind op)))
+  (contains? step/assertion-kinds (:op/kind op)))
 
 (defn perform-runtime!
   "Execute a :runtime op through ICljsEval. Returns an outcome map.
@@ -454,8 +458,13 @@
    deps: {:driver IBrowserDriver (required when the plan has browser ops)
           :cljs-eval ICljsEval   (required when the plan has runtime ops)}
 
-   When both ports support it, the session is stamped and the runtime channel is
-   pinned to that stamp, so state assertions read the browser this run drives.
+   A runtime channel reaches the driven page one of two ways. An `ISessionBound`
+   channel evaluates INSIDE the session, so it is simply bound to it. An
+   out-of-band channel cannot be bound, so instead the session is stamped and
+   the channel pinned to that stamp — without which the REPL answers from
+   whichever runtime the toolchain happens to pick, and any other open tab
+   silently decides every state assertion.
+
    With `:app-db-schema` configured, a passing step is re-checked against that
    schema before it counts as green. Steps after the first failure are reported
    as :skipped."
@@ -476,6 +485,9 @@
         (if (r/err? session-res)
           session-res
           (let [session (:ok session-res)
+                deps    (cond-> deps
+                          (and session (ports/session-bound? (:cljs-eval deps)))
+                          (update :cljs-eval ports/with-session session))
                 token   (when (and session needs-runtime? (affinity-possible? deps))
                           (let [t (str (random-uuid))]
                             (when (r/ok? (ports/mark-session! (:driver deps) session t)) t)))

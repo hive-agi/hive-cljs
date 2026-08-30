@@ -9,9 +9,15 @@
 
 <!-- /hive-badges -->
 
-ClojureScript development as a hive IAddon: **shadow-cljs build status, cljs-eval,
-Playwright e2e scenarios, per-namespace coverage and build→e2e watching**, driven
-by config in your project root.
+Frontend development as a hive IAddon: **build status, runtime eval, Playwright
+e2e scenarios, per-namespace coverage and build→e2e watching**, driven by config
+in your project root.
+
+ClojureScript gets the deepest integration — shadow-cljs build supervision and
+re-frame state assertions. **Any other stack** — Elm, React, Svelte, Vue, plain
+JavaScript — gets the same scenario vocabulary with
+`:hive.cljs/toolchain :browser`, where state assertions are evaluated in the page
+itself. See [the two runtime vocabularies](docs/steps.md#runtime-steps).
 
 One addon. One `cljs` subdomain on the `code` tool. Three ports.
 

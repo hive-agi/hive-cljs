@@ -121,11 +121,21 @@ coerced to a long, so `:port` type-checks without a wrapper.
 ```
 
 Selects the `IToolchain` that connects this project's build tool and runtime
-eval channel. `:shadow-cljs` ships; anything else must have been registered with
-`hive-cljs.toolchain/register!` before a session opens. An id nobody registered
-is reported by `doctor` as `:toolchain/unknown` with the known ids listed, and
-the build and runtime channels read `:down` for that reason rather than for a
-connectivity one.
+eval channel.
+
+| Id | Build channel | Runtime channel | For |
+|---|---|---|---|
+| `:shadow-cljs` (default) | shadow's remote relay | cljs nREPL, re-frame vocabulary | ClojureScript |
+| `:browser` | none — reports `:build-tool/not-supervised` | the page itself, JavaScript vocabulary | Elm, React, Svelte, Vue, plain JS |
+
+Anything else must have been registered with `hive-cljs.toolchain/register!`
+before a session opens. An id nobody registered is reported by `doctor` as
+`:toolchain/unknown` with the known ids listed, and the build and runtime
+channels read `:down` for that reason rather than for a connectivity one.
+
+With `:browser`, `:hive.cljs/shadow` is ignored and `cljs status` / `cljs
+compile` / the build→e2e watcher stay dark — there is no build server to ask.
+Scenarios, coverage of the DOM, and the `-js` runtime steps all work.
 
 The browser channel is not affected: it drives a page, and a page is a page
 whatever compiled it.

@@ -21,7 +21,8 @@
 
 (def ^:private shipped
   "Adapters this library ships, as symbols naming a 0-arity constructor."
-  {:shadow-cljs 'hive-cljs.shadow.toolchain/toolchain})
+  {:shadow-cljs 'hive-cljs.shadow.toolchain/toolchain
+   :browser     'hive-cljs.browser.toolchain/toolchain})
 
 (defonce ^:private registry (atom {}))
 

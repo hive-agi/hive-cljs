@@ -60,9 +60,28 @@ user sees, `:expect-sub` proves what the app believes.
 ## Runtime steps
 
 Evaluated inside the running application — in the page the scenario itself drives,
-not merely in some runtime attached to the build. All require `:nrepl-port` in the
-config and a build id (explicit `:build`, or inherited when the project has one
-build).
+not merely in some runtime attached to the build.
+
+There are **two runtime vocabularies**, and which one your project can use is
+decided by `:hive.cljs/toolchain`:
+
+| Vocabulary | Kinds | Speaks to |
+|---|---|---|
+| re-frame | `:eval-cljs` `:dispatch` `:expect-sub` `:expect-db` `:wait-for-sub` `:wait-for-db` | a ClojureScript app over the shadow nREPL (`:shadow-cljs`) |
+| JavaScript | `:eval-js` `:expect-js` `:wait-for-js` | **any** app, evaluated in the page (`:browser`, and any driver that can evaluate) |
+
+A step whose vocabulary the connected channel does not speak reports
+`:incomplete` — never a pass, and never a failure of your application:
+
+```
+the runtime channel has no rendering for :expect-sub — that step vocabulary
+belongs to another stack
+```
+
+### The re-frame vocabulary
+
+Requires `:nrepl-port` in the config and a build id (explicit `:build`, or
+inherited when the project has one build).
 
 | Step | Evaluates |
 |---|---|
@@ -79,6 +98,42 @@ The predicate is source text, so any expression works:
 `:expect-sub` and `:expect-db` are **assertions** — a `false` or `nil` result
 fails the step. `:eval-cljs` and `:dispatch` are **actions** — they pass unless
 evaluation errors.
+
+### The JavaScript vocabulary
+
+Works for Elm, React, Svelte, Vue and hand-written JavaScript alike: the
+expression is evaluated in the page the scenario is driving, so there is no
+runtime to configure and no `:nrepl-port` to set.
+
+| Step | Evaluates |
+|---|---|
+| `[:eval-js "window.app.reset()"]` | the expression; passes unless it throws |
+| `[:expect-js "document.title === 'Inbox'"]` | the expression as an assertion |
+| `[:wait-for-js "window.store.getState().ready"]` | the same, polled until it holds |
+
+`:expect-js` uses **JavaScript** truthiness, so `0`, `""`, `null`, `undefined`
+and `NaN` all fail the step. A passing assertion reports the value it saw rather
+than a bare `true`, so the report says what the page actually held.
+
+These steps need a page, which means a `:goto` (or any navigating step) has to
+come first — otherwise there is no application to ask:
+
+```clojure
+[[:goto "/"]
+ [:click "#load"]
+ [:wait-for-js "window.__elmModel.items.length > 0"]
+ [:expect-js "document.querySelectorAll('.item').length === 3"]]
+```
+
+How an app exposes its state to that first expression is the app's business: an
+Elm port writing to `window`, a Redux store, a Svelte store, a signal. Nothing
+here reaches into a framework's internals — which is exactly why it works for
+all of them.
+
+Two things the JavaScript channel deliberately cannot do, both of which report
+rather than pretend: the `:app-db-schema` invariant, and `cljs e2e mutate`'s
+`--auto` fault derivation. Both mean rewriting the application's own handler
+registry, which reading a page does not permit. Declared `:faults` still work.
 
 ### Condition-waits on state
 

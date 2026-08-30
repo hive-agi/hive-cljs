@@ -66,7 +66,15 @@
   ports/IPageMarker
   (mark-session! [_ _session token]
     (swap! state-ref update :marks conj token)
-    (r/ok token)))
+    (r/ok token))
+
+  ports/IPageEval
+  (eval-in-page [_ session source]
+    (swap! state-ref update :page-evals conj [(:stub-session session) source])
+    (let [v ((:page-value-fn @state-ref) source)]
+      (if (and (map? v) (contains? v :error))
+        v
+        (r/ok {:value v :printed (pr-str v)})))))
 
 (defrecord StubDriverNoMarker [state-ref outcome-fn]
   ports/IBrowserDriver
@@ -92,7 +100,9 @@
       {:state :fail :detail (str "stub failure on " kind) :elapsed-ms 1}
       {:state :pass :elapsed-ms 1})))
 
-(defn- driver-state [] (atom {:sessions 0 :ops [] :closed 0 :marks []}))
+(defn- driver-state []
+  (atom {:sessions 0 :ops [] :closed 0 :marks []
+         :page-evals [] :page-value-fn (constantly true)}))
 
 (defn driver
   ([] (driver always-pass))
@@ -106,6 +116,18 @@
 (defn performed-ops [stub] (:ops @(:state-ref stub)))
 (defn sessions-opened [stub] (:sessions @(:state-ref stub)))
 (defn sessions-closed [stub] (:closed @(:state-ref stub)))
+
+(defn page-evals
+  "`[[session-id source] …]` — what was evaluated in which page."
+  [stub]
+  (:page-evals @(:state-ref stub)))
+
+(defn answering-page
+  "Make the driver's page answer `f` (a fn of the source text) for every
+   in-page evaluation. Returns the driver."
+  [stub f]
+  (swap! (:state-ref stub) assoc :page-value-fn f)
+  stub)
 
 ;; =============================================================================
 ;; ICljsEval

@@ -62,6 +62,18 @@
      JS as `window.__hiveCljsToken`. Must survive navigation.
      Returns a Result of token."))
 
+(defprotocol IPageEval
+  "Optional: evaluate source text in the page a session is driving.
+
+   The DOM channel is already stack agnostic — a page is a page whatever
+   compiled it — so a driver that can evaluate is a runtime channel for every
+   stack at once, reached through `browser.page-eval`."
+
+  (eval-in-page [this session source]
+    "Evaluate `source` in `session`'s page and return a Result of
+     {:value <data> :printed str}. Host collections arrive as Clojure data, so a
+     JavaScript array reads back as a vector."))
+
 ;; =============================================================================
 ;; ICljsEval — the runtime channel
 ;; =============================================================================
@@ -137,6 +149,19 @@
   (neutralize-source [this kind id]
     "Source text re-registering handler `id` of `kind` as a no-op."))
 
+(defprotocol ISessionBound
+  "Optional: a runtime channel that evaluates INSIDE the browser session the
+   scenario drives.
+
+   Such a channel has no runtime to CHOOSE and therefore nothing to pin — it is
+   in-band by construction, which is why `IPageMarker`/`IRuntimeAffinity` do not
+   apply to it. Those exist only because an out-of-band REPL can be answered by
+   a runtime nobody is driving."
+
+  (with-session [this session]
+    "Return a channel bound to `session`. The receiver is left unchanged, so one
+     channel value serves every run."))
+
 ;; =============================================================================
 ;; IToolchain — how one frontend stack's channels are opened and released
 ;; =============================================================================
@@ -177,5 +202,8 @@
 
 (defn runtime-dialect? [x] (satisfies? IRuntimeDialect x))
 (defn runtime-introspection? [x] (satisfies? IRuntimeIntrospection x))
+
+(defn page-eval? [x] (satisfies? IPageEval x))
+(defn session-bound? [x] (satisfies? ISessionBound x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))

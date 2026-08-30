@@ -31,6 +31,19 @@
   [detail]
   {:state :fail :detail detail})
 
+(defn js->data
+  "Host values from the page as Clojure data.
+
+   A JavaScript array must read back as a VECTOR: a polled probe returns
+   `[truthy? value]`, and a java.util.List would fall through the caller's
+   vector check and be mistaken for a bare value. Object keys stay STRINGS —
+   they are the page's own names, not this library's keywords."
+  [x]
+  (cond
+    (instance? java.util.List x) (mapv js->data x)
+    (instance? java.util.Map x)  (into {} (map (fn [[k v]] [(str k) (js->data v)])) x)
+    :else x))
+
 ;; =============================================================================
 ;; Op interpreter
 ;; =============================================================================
@@ -215,7 +228,16 @@
         (.evaluate (page-of session) script)
         (r/ok token))
       (catch Throwable e
-        (r/err :browser/mark-failed {:cause (.getMessage e)})))))
+        (r/err :browser/mark-failed {:cause (.getMessage e)}))))
+
+  ports/IPageEval
+  (eval-in-page [_ session source]
+    (try
+      (let [v (js->data (.evaluate (page-of session) source))]
+        (r/ok {:value v :printed (pr-str v)}))
+      (catch Throwable e
+        (r/err :browser/eval-failed
+               {:cause (.getMessage e) :source source})))))
 
 (defn driver
   "Construct the Playwright-backed IBrowserDriver."
