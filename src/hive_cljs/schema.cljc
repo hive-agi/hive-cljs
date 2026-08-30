@@ -159,7 +159,9 @@
   [:map {:closed true}
    [:shadow/id BuildId]
    [:http-port {:optional true} Port]
-   [:entry {:optional true} NonBlankString]])
+   [:entry {:optional true} NonBlankString]
+   ;; argv for a toolchain whose build is a command rather than a server
+   [:command {:optional true} [:vector NonBlankString]]])
 
 (def E2eConfig
   [:map {:closed true}

@@ -1,14 +1,17 @@
 (ns hive-cljs.browser.toolchain
-  "The stack-agnostic toolchain: no build supervision, and a runtime channel
-   that evaluates in the page itself.
+  "The stack-agnostic toolchain: the page is the runtime, and the build is a
+   command rather than a server.
 
    This is what an Elm, React, Svelte, Vue or hand-written application looks
-   like to hive-cljs. It supervises no build because those toolchains have no
-   long-lived server to ask — `cljs status` and the build→e2e watcher stay dark
-   until a build adapter is configured — but every browser step and every
-   `-js` runtime step works exactly as it does for ClojureScript."
+   like to hive-cljs. Every browser step and every `-js` / `-state` runtime step
+   works exactly as it does for ClojureScript. Build supervision appears when a
+   build declares a `:command` and is an explained absence when none does —
+   these toolchains have no long-lived server to ask, so there is nothing to
+   connect to and nothing to poll."
   (:require [hive-cljs.browser.factory :as factory]
             [hive-cljs.browser.page-eval :as page-eval]
+            [hive-cljs.build.process :as process]
+            [hive-cljs.manifest :as manifest]
             [hive-cljs.ports :as ports]
             [hive-dsl.result :as r]))
 
@@ -19,10 +22,13 @@
 (defrecord BrowserToolchain []
   ports/IToolchain
 
-  (open-build-tool [_ _manifest]
-    (r/err :build-tool/not-supervised
-           {:hint (str "the :browser toolchain watches no build — register an "
-                       "IToolchain that opens one, or run the build yourself")}))
+  (open-build-tool [_ manifest]
+    (if-let [commands (seq (manifest/build-commands manifest))]
+      (r/ok (process/build-tool (:manifest/root manifest) (into {} commands)))
+      (r/err :build-tool/not-supervised
+             {:hint (str "no build declares a :command — add one under "
+                         ":hive.cljs/builds (e.g. [\"npx\" \"vite\" \"build\"]), "
+                         "or run the build yourself")})))
 
   (open-runtime [_ _manifest]
     ;; Resolved here rather than handed down from the composition root: the
@@ -30,10 +36,10 @@
     ;; to, so which driver VALUE performs the evaluation does not matter.
     (r/bind (factory/driver) (fn [d] (r/ok (page-eval/channel d)))))
 
+  ;; Nothing to release. The build tool owns no connection — it spawns a process
+  ;; per compile and waits for it — and the session the runtime borrows is
+  ;; closed by the run that opened it.
   (close-build-tool! [_ _] nil)
-
-  ;; Nothing to release: the channel owns no connection, and the session it
-  ;; borrows is closed by the run that opened it.
   (close-runtime! [_ _] nil))
 
 (defn toolchain

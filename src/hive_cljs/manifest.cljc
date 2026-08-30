@@ -88,7 +88,8 @@
   (let [raw (or raw {})]
     (cond-> {:shadow/id (or (:shadow/id raw) id)}
       (:http-port raw) (assoc :http-port (:http-port raw))
-      (:entry raw)     (assoc :entry (:entry raw)))))
+      (:entry raw)     (assoc :entry (:entry raw))
+      (seq (:command raw)) (assoc :command (mapv str (:command raw))))))
 
 (defn normalize-builds
   [raw]
@@ -259,6 +260,15 @@
 (defn build-ids
   [manifest]
   (vec (keys (:manifest/builds manifest))))
+
+(defn build-commands
+  "`{build-id argv}` for every build that declares one. Empty when none do,
+   which is how a toolchain decides whether it can supervise a build at all."
+  [manifest]
+  (into {}
+        (keep (fn [[id spec]]
+                (when (seq (:command spec)) [id (:command spec)])))
+        (:manifest/builds manifest)))
 
 (defn coverage
   "Normalized coverage config, or nil when the project authors none."

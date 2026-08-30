@@ -15,12 +15,15 @@ PROMOTE    verdict   (raw payload → verdict / report)
 COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
-DIALECT    dialect/re-frame (op → ClojureScript source text)
-REGISTRY   toolchain (id → IToolchain)   ← the composition root's swap point
-ADAPTERS   shadow/toolchain → IToolchain
+DIALECT    dialect/re-frame · dialect/js   (op → source text a runtime evaluates)
+REGISTRY   toolchain (id → IToolchain)     ← the composition root's swap point
+ADAPTERS   shadow/toolchain → IToolchain           (:shadow-cljs)
              ├ shadow/relay → IBuildTool
              └ shadow/nrepl → ICljsEval + IRuntimeDialect + IRuntimeIntrospection
-           browser/playwright → IBrowserDriver
+           browser/toolchain → IToolchain          (:browser — every other stack)
+             ├ build/process   → IBuildTool        (argv + exit code)
+             └ browser/page-eval → ICljsEval + IRuntimeDialect + ISessionBound
+           browser/playwright → IBrowserDriver + IPageMarker + IPageEval
 ```
 
 A vendor is named **only** in an adapter namespace. Everything above depends on

@@ -126,16 +126,16 @@ eval channel.
 | Id | Build channel | Runtime channel | For |
 |---|---|---|---|
 | `:shadow-cljs` (default) | shadow's remote relay | cljs nREPL, re-frame vocabulary | ClojureScript |
-| `:browser` | none — reports `:build-tool/not-supervised` | the page itself, JavaScript vocabulary | Elm, React, Svelte, Vue, plain JS |
+| `:browser` | a build's `:command` (argv), else `:build-tool/not-supervised` | the page itself, JavaScript + probe vocabulary | Elm, React, Svelte, Vue, plain JS |
 
 Anything else must have been registered with `hive-cljs.toolchain/register!`
 before a session opens. An id nobody registered is reported by `doctor` as
 `:toolchain/unknown` with the known ids listed, and the build and runtime
 channels read `:down` for that reason rather than for a connectivity one.
 
-With `:browser`, `:hive.cljs/shadow` is ignored and `cljs status` / `cljs
-compile` / the build→e2e watcher stay dark — there is no build server to ask.
-Scenarios, coverage of the DOM, and the `-js` runtime steps all work.
+With `:browser`, `:hive.cljs/shadow` is ignored. Scenarios and the `-js` /
+`-state` runtime steps work as they do for ClojureScript; build supervision
+appears once a build declares a [`:command`](#command--a-build-whose-verdict-is-an-exit-code).
 
 The browser channel is not affected: it drives a page, and a page is a page
 whatever compiled it.
@@ -158,12 +158,40 @@ takes the next free port with only a warning. `:nrepl-port` is `shadow-cljs.edn`
 ```clojure
 {:app {:shadow/id :app        ; defaults to the map key
        :http-port 8280        ; the dev-http port; used to infer :base-url
-       :entry     "/"}}       ; optional
+       :entry     "/"          ; optional
+       :command   ["npx" "vite" "build"]}}   ; optional; see below
 ```
 
 A scenario that names no `:build` inherits the project's build when there is
 exactly one. With two or more the choice is ambiguous, `:plan/build` is left
 unset, and any runtime step returns a typed error telling you to set `:build`.
+
+#### `:command` — a build whose verdict is an exit code
+
+Under `:shadow-cljs` the build is a running server, and hive asks it. Every
+other toolchain builds by running something:
+
+```clojure
+{:hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 8000
+                          :command ["elm" "make" "src/Main.elm"
+                                    "--output=public/app.js"]}}}
+```
+
+`cljs compile app` then runs that argv with the project root as cwd. Exit 0 is
+`:completed`; anything else is `:failed`, carrying the compiler's own output
+(both streams — `elm make` writes errors to stderr, `tsc` to stdout) as the
+report's `:build/errors`. A binary that cannot be launched at all is
+`:build/exec-failed`, not a red build: that is not your source failing to
+compile.
+
+Declare no `:command` and the toolchain reports `:build-tool/not-supervised` —
+scenarios still run, `cljs status` and `cljs compile` do not.
+
+One real limit: this channel only sees compiles **it** ran, so `cljs watch`
+couples to hive-driven builds and not to an external `vite --watch`. It is
+reported that way rather than papered over with a poller that would invent a
+verdict between file writes.
 
 ### `:hive.cljs/e2e` — browser and scenarios
 
