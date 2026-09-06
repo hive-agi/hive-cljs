@@ -5,7 +5,8 @@
    Extracted from the shadow nREPL adapter, where none of it belonged: this is
    re-frame specific, not shadow specific, and conflating the two axes was what
    kept `boundary` — which claims to name no vendor — requiring one."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [hive-cljs.dialect.js :as jsd]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -113,6 +114,16 @@
 ;; Op → source
 ;; =============================================================================
 
+(defn js-form
+  "Source text evaluating a JavaScript expression from a ClojureScript runtime.
+
+   A page compiled from ClojureScript is still a page, so the stack-agnostic
+   `:*-js` kinds render here too: the JS dialect supplies the expression and its
+   truthiness rules, js/eval runs it, and js->clj brings the answer back as
+   data the JVM side can read."
+  [source]
+  (str "(js->clj (js/eval " (pr-str source) "))"))
+
 (defn assertion-source
   "Source text a runtime op asserts on, or nil for a kind this dialect does not
    render — an unknown kind must reach the caller as `:incomplete`, not as an
@@ -125,6 +136,8 @@
       :dispatch   (dispatch-form a frame)
       :expect-sub (predicate-call b (sub-form a frame))
       :expect-db  (predicate-call b (db-form a frame))
+      :eval-js    (js-form (jsd/expr a))
+      :expect-js  (js-form (jsd/truthy-value (jsd/expr a)))
       nil)))
 
 (defn probe-source
@@ -135,4 +148,5 @@
     (case (:op/kind op)
       :wait-for-sub (probe-call b (sub-form a frame))
       :wait-for-db  (probe-call b (db-form a frame))
+      :wait-for-js  (js-form (jsd/truthy-probe (jsd/expr a)))
       nil)))

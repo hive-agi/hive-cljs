@@ -37,11 +37,23 @@
          (re-frame/assertion-source (op :eval-cljs "(js/alert 1)")))
       "an authored expression passes through untranslated"))
 
+(deftest the-re-frame-dialect-also-renders-the-javascript-kinds
+  ;; A page compiled from ClojureScript is still a page: the stack-agnostic
+  ;; kinds render through js/eval with the JS dialect's own truthiness, so one
+  ;; scenario can hold a re-frame assertion and a DOM one side by side.
+  (is (= (str "(js->clj (js/eval " (pr-str (js/truthy-value "1 + 1")) "))")
+         (re-frame/assertion-source (op :expect-js "1 + 1"))))
+  (is (= (str "(js->clj (js/eval " (pr-str (js/truthy-probe "document.title")) "))")
+         (re-frame/probe-source (op :wait-for-js "document.title"))))
+  (is (= "(js->clj (js/eval \"x\"))"
+         (re-frame/assertion-source (op :eval-js "x")))))
+
 (deftest the-re-frame-dialect-declines-a-kind-it-does-not-know
   ;; nil, not a best-effort expression assembled out of the wrong arguments:
   ;; the caller turns nil into :incomplete, and a guess would turn it into a
-  ;; pass or a fail that means nothing.
-  (is (nil? (re-frame/assertion-source (op :expect-js "window.model"))))
+  ;; pass or a fail that means nothing. The probe contract is the one kind a
+  ;; ClojureScript runtime does not answer through this dialect.
+  (is (nil? (re-frame/assertion-source (op :expect-state [:model] "v"))))
   (is (nil? (re-frame/probe-source (op :expect-sub [:a] "some?")))
       "an assertion kind is not a probe kind"))
 

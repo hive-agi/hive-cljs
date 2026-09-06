@@ -102,9 +102,10 @@
   [raw]
   (cond-> {:id    (:id raw)
            :steps (vec (:steps raw))}
-    (:build raw) (assoc :build (:build raw))
-    (:frame raw) (assoc :frame (:frame raw))
-    (:doc raw)   (assoc :doc (:doc raw))
+    (:build raw)    (assoc :build (:build raw))
+    (:frame raw)    (assoc :frame (:frame raw))
+    (:viewport raw) (assoc :viewport (:viewport raw))
+    (:doc raw)      (assoc :doc (:doc raw))
     (seq (:tags raw)) (assoc :tags (set (:tags raw)))))
 
 (defn infer-base-url

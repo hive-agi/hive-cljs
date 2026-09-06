@@ -55,6 +55,12 @@
       (is (= {:width 1280 :height 800} (:viewport (session m adhoc)))))
     (testing "a scenario's own viewport wins over the manifest's"
       (is (= {:width 390 :height 844} (:viewport (session m phone)))))
+    (testing "a scenario's viewport survives manifest parsing, not only a hand-built scenario"
+      ;; normalize-scenario used to keep an allow-list of keys, and a knob that
+      ;; is not on it is dropped before the plan ever sees it.
+      (let [m2 (:ok (manifest/parse (assoc-in fix/raw [:hive.cljs/e2e :scenarios] [phone]) "/tmp/x"))]
+        (is (= {:width 390 :height 844} (:viewport (first (manifest/scenarios m2)))))
+        (is (= {:width 390 :height 844} (:viewport (:plan/session (:ok (plan/plan-for-id m2 :phone))))))))
     (testing "a plan carrying a viewport still conforms to the schema"
       (let [p (:ok (plan/build-plan m phone))]
         (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p)))))
