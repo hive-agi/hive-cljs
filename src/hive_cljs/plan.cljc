@@ -39,6 +39,7 @@
      :headless   (:headless e2e)
      :base-url   (:base-url e2e)
      :timeout-ms (:timeout-ms e2e)
+     :ignore-https-errors (boolean (:ignore-https-errors e2e))
      :artifacts-dir (:artifacts-dir e2e)}))
 
 (defn runtime-opts

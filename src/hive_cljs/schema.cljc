@@ -168,6 +168,10 @@
    [:base-url NonBlankString]
    [:browser BrowserEngine]
    [:headless :boolean]
+   ;; Accept a TLS certificate the browser cannot verify. For a dev gateway
+   ;; behind a self-signed certificate (Envoy in docker compose); never for a
+   ;; public origin.
+   [:ignore-https-errors {:optional true} :boolean]
    [:timeout-ms Millis]
    [:poll-ms Millis]
    [:frame {:optional true} :keyword]

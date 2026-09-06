@@ -13,7 +13,8 @@
             [hive-dsl.result :as r])
   (:import [com.microsoft.playwright Playwright Browser BrowserType$LaunchOptions
             BrowserContext Page Page$ScreenshotOptions Locator]
-           [java.nio.file Paths]))
+           [java.nio.file Paths]
+[com.microsoft.playwright Browser$NewContextOptions]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -185,11 +186,13 @@
 
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
-  (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir]}]
+  (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors]}]
     (try
       (let [^Playwright pw (Playwright/create)
             br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless))
-            ^BrowserContext ctx (.newContext br)
+            ctx-opts (cond-> (Browser$NewContextOptions.)
+                       ignore-https-errors (.setIgnoreHTTPSErrors true))
+            ^BrowserContext ctx (.newContext br ctx-opts)
             ^Page page (.newPage ctx)]
         (when timeout-ms
           (.setDefaultTimeout page (double timeout-ms)))
