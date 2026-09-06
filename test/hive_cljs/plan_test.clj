@@ -41,6 +41,29 @@
           p (:ok (plan/build-plan m {:id :adhoc :build :other :steps [[:goto "/"]]}))]
       (is (= :other (:plan/build p))))))
 
+(deftest a-viewport-on-the-manifest-reaches-the-session-and-a-scenario-overrides-it
+  (let [m (:ok (manifest/parse (-> fix/raw
+                                   (assoc-in [:hive.cljs/e2e :viewport] {:width 1280 :height 800})
+                                   (assoc-in [:hive.cljs/e2e :ignore-https-errors] true))
+                               "/tmp/x"))
+        session (fn [manifest scenario] (:plan/session (:ok (plan/build-plan manifest scenario))))
+        adhoc {:id :adhoc :steps [[:goto "/"]]}
+        phone {:id :phone :viewport {:width 390 :height 844} :steps [[:goto "/"]]}]
+    (testing "no viewport declared → none in the session, so the driver keeps its default"
+      (is (not (contains? (session fix/manifest adhoc) :viewport))))
+    (testing "the manifest-wide viewport reaches a scenario that declares none"
+      (is (= {:width 1280 :height 800} (:viewport (session m adhoc)))))
+    (testing "a scenario's own viewport wins over the manifest's"
+      (is (= {:width 390 :height 844} (:viewport (session m phone)))))
+    (testing "a plan carrying a viewport still conforms to the schema"
+      (let [p (:ok (plan/build-plan m phone))]
+        (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p)))))
+    (testing "the manifest's :ignore-https-errors survives parsing into the session"
+      ;; parse used to drop it, so the flag a manifest declared never reached
+      ;; the driver; the session must carry what the file says.
+      (is (true? (:ignore-https-errors (session m adhoc))))
+      (is (false? (:ignore-https-errors (session fix/manifest adhoc)))))))
+
 (deftest a-scenario-resolves-urls-against-the-port-of-the-build-it-names
   (let [m (:ok (manifest/parse (-> fix/raw
                                    (assoc-in [:hive.cljs/builds :scene] {:http-port 8087})

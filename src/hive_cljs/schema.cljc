@@ -114,11 +114,20 @@
    [:op/expect {:optional true} [:map-of :keyword :any]]
    [:op/source Step]])
 
+(def Viewport
+  "Browser viewport in CSS pixels. On the manifest it applies to every
+   scenario; on one scenario it overrides the manifest's, so a phone-sized run
+   and a desktop one can share a manifest."
+  [:map {:closed true}
+   [:width [:int {:min 1}]]
+   [:height [:int {:min 1}]]])
+
 (def Scenario
   [:map {:closed true}
    [:id ScenarioId]
    [:build {:optional true} BuildId]
    [:frame {:optional true} :keyword]
+   [:viewport {:optional true} Viewport]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -172,6 +181,7 @@
    ;; behind a self-signed certificate (Envoy in docker compose); never for a
    ;; public origin.
    [:ignore-https-errors {:optional true} :boolean]
+   [:viewport {:optional true} Viewport]
    [:timeout-ms Millis]
    [:poll-ms Millis]
    [:frame {:optional true} :keyword]
