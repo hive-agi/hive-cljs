@@ -25,6 +25,14 @@
                                  "/tmp/x"))]
       (is (= "http://127.0.0.1:9999" (get-in m [:manifest/e2e :base-url]))))))
 
+(deftest a-build-carries-its-own-base-url-through-its-http-port
+  (let [builds (:manifest/builds fix/manifest)]
+    (is (= "http://localhost:8280" (manifest/build-base-url builds :app)))
+    (testing "an undeclared build has none"
+      (is (nil? (manifest/build-base-url builds :nope))))
+    (testing "a build with no :http-port has none"
+      (is (nil? (manifest/build-base-url {:static {:shadow/id :static}} :static))))))
+
 (deftest build-id-defaults-to-its-map-key
   (is (= :app (get-in fix/manifest [:manifest/builds :app :shadow/id]))))
 

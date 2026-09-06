@@ -166,6 +166,24 @@ A scenario that names no `:build` inherits the project's build when there is
 exactly one. With two or more the choice is ambiguous, `:plan/build` is left
 unset, and any runtime step returns a typed error telling you to set `:build`.
 
+A scenario that *does* name a `:build` also resolves its relative URLs against
+that build's `:http-port`, so two builds served on two ports are both reachable
+from one manifest:
+
+```clojure
+{:hive.cljs/builds {:app   {:http-port 8086}
+                    :scene {:http-port 8087}}
+ :hive.cljs/e2e
+ {:scenarios [{:id :on-app   :build :app   :steps [[:goto "/index.html"]]}
+              {:id :on-scene :build :scene :steps [[:goto "/index.html"]]}]}}
+```
+
+`:on-app` opens `http://localhost:8086/index.html`; `:on-scene` opens
+`http://localhost:8087/index.html`. Precedence, decided per scenario: the named
+build's `:http-port`, else the manifest-wide `:base-url`, else the first build's
+port. A manifest-wide `:base-url` therefore still governs every scenario that
+names no build, or names one declaring no port.
+
 #### `:command` — a build whose verdict is an exit code
 
 Under `:shadow-cljs` the build is a running server, and hive asks it. Every
@@ -215,7 +233,9 @@ verdict between file writes.
                    :steps [[:goto "/"] …]}]}
 ```
 
-Relative `:goto` URLs resolve against `:base-url`; absolute ones pass through.
+Relative `:goto` URLs resolve against the scenario's base URL — the
+`:http-port` of the `:build` it names, else this `:base-url`; absolute ones pass
+through.
 Screenshots land in `:artifacts-dir` and are listed in the run report's
 `:run/artifacts`.
 
@@ -314,7 +334,7 @@ A run that measured nothing is `:unavailable`, never a pass.
 | `toolchain` | `:shadow-cljs` |
 | `shadow :host` / `:port` | `"localhost"` / `9630` |
 | `shadow :nrepl-port` | none — runtime channel disabled |
-| `e2e :base-url` | `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |
+| `e2e :base-url` | per scenario: the named `:build`'s `:http-port`, else this key, else `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |
 | `e2e :browser` / `:headless` / `:timeout-ms` | `:chromium` / `true` / `15000` |
 | `e2e :poll-ms` | `250` |
 | `e2e :artifacts-dir` | `<root>/.hive-cljs/artifacts` |

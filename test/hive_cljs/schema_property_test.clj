@@ -134,3 +134,14 @@
    :out s/CoverageConfig
    :rel (fn [in out] (= (:source-prefixes in) (:coverage/source-prefixes out)))
    :num-tests 100})
+
+(ht/deftrifecta-from-schema build-base-url
+  hive-cljs.manifest/build-base-url
+  {:in  [:cat [:map-of s/BuildId s/BuildSpec] s/BuildId]
+   :out [:maybe s/NonBlankString]
+   :rel (fn [[builds id] out]
+          (if-let [port (get-in builds [id :http-port])]
+            (= out (str "http://localhost:" port))
+            (nil? out)))
+   :mutation false
+   :num-tests 200})

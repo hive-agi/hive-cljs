@@ -60,15 +60,28 @@
   (let [ids (manifest/build-ids manifest)]
     (when (= 1 (count ids)) (first ids))))
 
+(defn scenario-base-url
+  "Base URL this scenario's relative URLs resolve against.
+
+   A scenario that names a `:build` resolves against THAT build's `:http-port`,
+   so one manifest can drive several builds served on different ports. A
+   scenario that names none, or names a build with no port, falls back to the
+   manifest-wide `:base-url`."
+  [manifest scenario]
+  (or (manifest/build-base-url (:manifest/builds manifest) (:build scenario))
+      (get-in manifest [:manifest/e2e :base-url])))
+
 (defn build-plan
   "Manifest + scenario → Result of `schema/RunPlan`.
 
-   A scenario without :build inherits the project's sole build id. A frame id
-   (scenario :frame, else e2e :frame) is stamped onto runtime ops so re-frame2
-   frame-scoped apps get frame-pinned subscribe/dispatch/db reads."
+   A scenario without :build inherits the project's sole build id. Relative
+   URLs resolve against the named build's `:http-port` when it declares one,
+   else against the manifest-wide :base-url. A frame id (scenario :frame, else
+   e2e :frame) is stamped onto runtime ops so re-frame2 frame-scoped apps get
+   frame-pinned subscribe/dispatch/db reads."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
-   (let [base-url (get-in manifest [:manifest/e2e :base-url])
+   (let [base-url (scenario-base-url manifest scenario)
          compiled (step/compile-steps rules (:steps scenario))
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))]
@@ -76,7 +89,7 @@
        compiled
        (r/ok (cond-> {:plan/scenario (:id scenario)
                       :plan/base-url base-url
-                      :plan/session  (session-opts manifest)
+                      :plan/session  (assoc (session-opts manifest) :base-url base-url)
                       :plan/runtime  (runtime-opts manifest frame)
                       :plan/ops      (cond->> (resolve-urls base-url (:ok compiled))
                                        frame (mapv #(if (= :runtime (:op/channel %))
@@ -122,5 +135,6 @@
 
 (m/=> absolutize [:=> [:cat s/NonBlankString s/NonBlankString] s/NonBlankString])
 (m/=> session-opts [:=> [:cat s/Manifest] [:map-of :keyword :any]])
+(m/=> scenario-base-url [:=> [:cat s/Manifest s/Scenario] s/NonBlankString])
 (m/=> channels-used [:=> [:cat s/RunPlan] [:set s/OpChannel]])
 (m/=> needs-runtime? [:=> [:cat s/RunPlan] :boolean])

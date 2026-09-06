@@ -41,6 +41,42 @@
           p (:ok (plan/build-plan m {:id :adhoc :build :other :steps [[:goto "/"]]}))]
       (is (= :other (:plan/build p))))))
 
+(deftest a-scenario-resolves-urls-against-the-port-of-the-build-it-names
+  (let [m (:ok (manifest/parse (-> fix/raw
+                                   (assoc-in [:hive.cljs/builds :scene] {:http-port 8087})
+                                   (assoc-in [:hive.cljs/e2e :scenarios]
+                                             [{:id :on-app :build :app :steps [[:goto "/index.html"]]}
+                                              {:id :on-scene :build :scene :steps [[:goto "/index.html"]]}
+                                              {:id :no-build :steps [[:goto "/index.html"]]}]))
+                               "/tmp/x"))
+        goto-url (fn [id] (first (:op/args (first (:plan/ops (:ok (plan/plan-for-id m id)))))))]
+    (testing "a second build on a second port is reachable, not just the first"
+      (is (= "http://localhost:8280/index.html" (goto-url :on-app)))
+      (is (= "http://localhost:8087/index.html" (goto-url :on-scene))))
+
+    (testing "a scenario naming no build keeps the manifest-wide base-url"
+      (is (= (get-in m [:manifest/e2e :base-url])
+             (:plan/base-url (:ok (plan/plan-for-id m :no-build))))))
+
+    (testing "the session opts carry the base-url the ops were resolved against"
+      (is (= "http://localhost:8087"
+             (get-in (:ok (plan/plan-for-id m :on-scene)) [:plan/session :base-url]))))))
+
+(deftest the-named-builds-port-wins-and-falls-back-when-there-is-none
+  (let [m (:ok (manifest/parse (-> fix/raw
+                                   (assoc-in [:hive.cljs/builds :scene] {:http-port 8087})
+                                   (assoc-in [:hive.cljs/builds :static] {:entry "/index.html"})
+                                   (assoc-in [:hive.cljs/e2e :base-url] "http://127.0.0.1:9999")
+                                   (assoc-in [:hive.cljs/e2e :scenarios]
+                                             [{:id :on-scene :build :scene :steps [[:goto "/a"]]}
+                                              {:id :on-static :build :static :steps [[:goto "/a"]]}]))
+                               "/tmp/x"))]
+    (testing "a declared :http-port outranks the manifest-wide :base-url"
+      (is (= "http://localhost:8087" (:plan/base-url (:ok (plan/plan-for-id m :on-scene))))))
+
+    (testing "a build with no :http-port falls back to the explicit :base-url"
+      (is (= "http://127.0.0.1:9999" (:plan/base-url (:ok (plan/plan-for-id m :on-static))))))))
+
 (deftest a-runtime-step-without-a-resolvable-build-is-a-typed-step-error
   (let [m    (:ok (manifest/parse (-> fix/raw
                                       (assoc-in [:hive.cljs/builds :other] {:http-port 9000})

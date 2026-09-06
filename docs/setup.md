@@ -310,7 +310,7 @@ server to connect to and no nREPL port to find.
 
 `:command` is optional — leave it out and scenarios still run, you just get no
 build verdict. `:http-port` is whatever serves your app; hive infers `:base-url`
-from it.
+from it, per scenario, from the `:build` that scenario names.
 
 ### 2. Serve the app and check the wiring
 
@@ -388,6 +388,63 @@ pretending: the `:app-db-schema` invariant, and `cljs e2e mutate --auto`. Both
 mean rewriting the application's own handler registry, which reading a page does
 not permit. Declared `:faults` still work, so mutation testing is available — it
 just needs you to say what to break.
+
+## A static tree next to a shadow app — two manifests
+
+A toolchain is a property of a **manifest**, not of a build. Under
+`:shadow-cljs` the runtime vocabulary — `:eval-cljs`, `:expect-sub`,
+`:expect-db`, and the JavaScript steps `:expect-js` / `:wait-for-js` — is
+evaluated by the shadow runtime attached to a build. A prerendered page has no
+such runtime, so under that toolchain those steps answer `:incomplete` with
+*runtime not bound to the driven page*, however healthy the page is. No per-build
+key changes that; the toolchain is chosen once, for the whole manifest.
+
+So a project that ships both a shadow app and a static export writes two
+manifests. A manifest is found by walking **up** from the directory you invoke
+in, so one in a subdirectory shadows the root one for anything run there:
+
+```clojure
+;; <project>/test/site/hive-cljs.edn — the prerendered tree
+{:hive.cljs/toolchain :browser
+
+ :hive.cljs/builds {:site {:http-port 8087
+                           :command ["bb" "site"]}}
+
+ :hive.cljs/e2e
+ {:base-url   "http://localhost:8087"
+  :browser    :chromium
+  :headless   true
+  :timeout-ms 30000
+  :scenarios
+  [{:id    :site-prerendered
+    :tags  [:site]
+    :doc   "The shipped page is HTML first: slides before any script."
+    :steps [[:goto "/index.html"]
+            [:wait-for ".reveal .slides section.present"]
+            [:expect-js "fetch(location.pathname).then(function(r){return r.text();}).then(function(h){return h.indexOf('<section') < h.indexOf('<script');})"]]}]}}
+```
+
+```clojure
+code {command: "cljs e2e run", directory: "/abs/path/to/project/test/site", tags: "site"}
+```
+
+Under `:browser` the JavaScript steps are evaluated by the driven page itself,
+so they work against any HTML — the same steps that were `:incomplete` under
+`:shadow-cljs` pass here. The root manifest keeps driving the shadow builds; the
+two never collide because they never share a directory.
+
+Three things that bite in this shape:
+
+- The static manifest sets `:base-url` explicitly (or lets its own single build
+  declare `:http-port`). Ports are per build now, so the root manifest can reach
+  every port it declares — but it still cannot lend this tree its toolchain.
+- `[:wait-for sel]` waits for **visible**. A slide framework that hides every
+  section until it marks one `.present` turns a broken init into a timeout on
+  the wait step rather than a JavaScript error. Wait on the selector that is
+  actually shown.
+- A step whose JavaScript returns a number is a measurement, and `:expect-js`
+  reports the value it saw. Put the reporting steps *before* the threshold
+  steps, or a failed threshold hides the number you wanted.
 
 ## Troubleshooting
 

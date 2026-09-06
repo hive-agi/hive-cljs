@@ -115,6 +115,14 @@
         (str "http://localhost:" port))
       "http://localhost:8080"))
 
+(defn build-base-url
+  "Base URL one build serves on, derived from its `:http-port`.
+
+   nil when the build is unknown or declares no port."
+  [builds build-id]
+  (when-let [port (get-in builds [build-id :http-port])]
+    (str "http://localhost:" port)))
+
 (defn normalize-e2e
   [raw builds root]
   (let [raw (or raw {})]
@@ -292,3 +300,6 @@
 (m/=> normalize [:=> [:cat [:map-of :keyword :any] s/NonBlankString] :map])
 (m/=> scenarios [:=> [:cat s/Manifest] [:vector s/Scenario]])
 (m/=> build-ids [:=> [:cat s/Manifest] [:vector s/BuildId]])
+
+(m/=> build-base-url [:=> [:cat [:map-of s/BuildId s/BuildSpec] s/BuildId]
+                      [:maybe s/NonBlankString]])
