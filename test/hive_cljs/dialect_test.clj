@@ -9,6 +9,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
+            [hive-cljs.dialect.js :as js]
             [hive-cljs.dialect.re-frame :as re-frame]
             [hive-cljs.ports :as ports]
             [hive-cljs.stub.ports :as stub]
@@ -95,6 +96,75 @@
     (is (= :mutation/no-introspection (:error res)))
     (testing "and says what to do instead"
       (is (str/includes? (:hint res) ":faults")))))
+
+;; =============================================================================
+;; Contrast sampling
+;; =============================================================================
+
+(deftest the-contrast-probe-asks-the-page-what-it-actually-painted
+  (let [source (js/contrast-rows-source
+                [{:id :body :selector "p" :limit 3}
+                 {:id :field :selector ".field input" :role :non-text}])]
+    (testing "it climbs for a background, which is the whole point of asking"
+      (is (str/includes? source "parentElement")
+          "an element almost never paints its own background")
+      (is (str/includes? source "documentElement")
+          "and the root is the backstop when no ancestor painted one"))
+
+    (testing "it collects the LAYERS and the opacity, and decides neither"
+      (is (str/includes? source "layers.push(c)")
+          "a translucent card over a dark page is neither of those colours")
+      (is (str/includes? source "opacity *= o")
+          "and a computed colour does not carry the opacity property"))
+
+    (testing "each spec reaches the page as the selector it named"
+      (is (str/includes? source "\"p\""))
+      (is (str/includes? source "\".field input\""))
+      (is (str/includes? source "\"non-text\""))
+      (is (str/includes? source "spec.limit")))
+
+    (testing "only :non-text is asserted; text is classified from its size"
+      (is (str/includes? source "role:null")
+          "a page that stamped 'text' on a heading would raise its bar")
+      (is (str/includes? source "cs.fontSize"))
+      (is (str/includes? source "fontWeight")))
+
+    (testing "what would be a false failure is skipped, not reported"
+      (is (str/includes? source "=== 'none'")
+          "an element with no border has no edge to measure")
+      (is (str/includes? source "textContent")
+          "and an empty node has no text to read"))
+
+    (testing "rows are positional, so no key spelling crosses the host boundary"
+      (is (str/includes? source "out.push([")))))
+
+(deftest a-border-side-reaches-the-page-as-a-property-that-exists
+  (testing "a keyword side is spelled the way computed style spells it"
+    (doseq [[given expected] {:top "Top" :left "Left" :bottom "Bottom"
+                              "Top" "Top" "left" "Left" nil "Top"}]
+      (is (str/includes? (js/contrast-rows-source
+                          [{:id :e :selector ".x" :role :non-text :side given}])
+                         (str "side:\"" expected "\""))
+          (str (pr-str given) " must not emit a property nothing answers to")))))
+
+(deftest one-bad-selector-is-one-bad-spec
+  (let [source (js/contrast-rows-source
+                [{:id :bad :selector "p:::nope"} {:id :good :selector "p"}])]
+    (is (str/includes? source "catch (e)")
+        "a selector the browser rejects must not abort every other spec")
+    (is (str/includes? source "-selector")
+        "it is reported as one unresolvable row instead")))
+
+(deftest a-selector-cannot-smuggle-source-into-the-page
+  (let [source (js/contrast-rows-source
+                [{:id :evil :selector "a\"); alert(1); //"}])]
+    (testing "the payload survives, INSIDE the string literal it was given as"
+      (is (str/includes? source "selector:\"a\\\"); alert(1); //\"")
+          "the quote that would close the literal is escaped, so the rest of
+           the selector stays data"))
+
+    (testing "and it never appears unescaped, which is what breaking out means"
+      (is (not (str/includes? source "selector:\"a\");"))))))
 
 ;; =============================================================================
 ;; The architecture claim itself

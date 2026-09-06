@@ -117,6 +117,109 @@
   (str "(() => { const v = " (read-source path) "; return [!!(" (expr pred) "), v]; })()"))
 
 ;; =============================================================================
+;; Contrast sampling
+;; =============================================================================
+
+(def ^:private backdrop-js
+  "JS collecting an element's background LAYERS and the opacity above them.
+
+   Returns `[layers, opacity]`: every background an ancestor paints, innermost
+   first, up to and including the first opaque one, and the product of the
+   `opacity` property from the element up to that ancestor.
+
+   Layers rather than one colour, because a translucent card over a dark page
+   is neither of those two colours; opacity separately, because a computed
+   `color` does not carry it. Both are folded in `contrast`, not here: this
+   side of the boundary collects, it does not decide."
+  (str "const __hcBackdrop = (el) => {\n"
+       "  const layers = [];\n"
+       "  let opacity = 1;\n"
+       "  let n = el;\n"
+       "  while (n) {\n"
+       "    const cs = getComputedStyle(n);\n"
+       "    const o = parseFloat(cs.opacity);\n"
+       "    const c = cs.backgroundColor;\n"
+       "    const m = c && c.match(/^rgba?\\(([^)]+)\\)/);\n"
+       "    let a = 0;\n"
+       "    if (m) {\n"
+       "      const p = m[1].split(/[,\\/\\s]+/).filter(s => s.length);\n"
+       "      a = p.length > 3 ? parseFloat(p[3]) : 1;\n"
+       "      if (a > 0) layers.push(c);\n"
+       "    }\n"
+       "    if (a >= 1) return [layers, opacity];\n"
+       "    if (o >= 0 && o < 1) opacity *= o;\n"
+       "    n = n.parentElement;\n"
+       "  }\n"
+       "  const root = getComputedStyle(document.documentElement).backgroundColor;\n"
+       "  return [layers.concat([root]), opacity];\n"
+       "};\n"))
+
+(defn- side-name
+  "A border side as the computed-style property spells it: `Top`, `Left`, ..."
+  [side]
+  (let [s (name (or side :top))]
+    (str (str/upper-case (subs s 0 1)) (str/lower-case (subs s 1)))))
+
+(defn- spec-literal [{:keys [id selector role side limit]}]
+  (str "{id:" (json-scalar (name (or id :sample)))
+       ",selector:" (json-scalar selector)
+       ",role:" (if (= :non-text role) (json-scalar "non-text") "null")
+       ",side:" (json-scalar (side-name side))
+       ",limit:" (long (or limit 10)) "}"))
+
+(defn contrast-rows-source
+  "JS collecting contrast rows for `specs` out of the page a session is driving.
+
+   Each spec is `{:id :selector :role :side :limit}`. Rows come back POSITIONAL
+   as `[id foreground background-layers role font-size-px bold? opacity]`, so
+   nothing depends on how a host spells a JavaScript key;
+   `contrast/rows->samples` promotes them.
+
+   A role is emitted only for `:non-text`, the one role a font size cannot
+   imply. Text carries its size and weight instead and is classified from
+   those, so a heading is judged at the bar its size earns.
+
+   Three things are skipped rather than reported, because each would be a
+   false failure and not a finding: text nodes with nothing in them,
+   `:non-text` edges whose border is `none` or zero width, and any spec whose
+   selector the browser rejects, which is reported as one unresolvable row
+   instead of aborting every other spec."
+  [specs]
+  (str "(() => {\n"
+       backdrop-js
+       "  const out = [];\n"
+       "  const specs = [" (str/join "," (map spec-literal specs)) "];\n"
+       "  for (const spec of specs) {\n"
+       "    let els;\n"
+       "    try {\n"
+       "      els = Array.from(document.querySelectorAll(spec.selector))\n"
+       "        .slice(0, spec.limit);\n"
+       "    } catch (e) {\n"
+       "      out.push([spec.id + '-selector', null, null, spec.role, null, false, 1]);\n"
+       "      continue;\n"
+       "    }\n"
+       "    els.forEach((el, i) => {\n"
+       "      const cs = getComputedStyle(el);\n"
+       "      const backdrop = __hcBackdrop(el);\n"
+       "      const id = spec.id + '-' + i;\n"
+       "      if (spec.role === 'non-text') {\n"
+       "        const w = parseFloat(cs['border' + spec.side + 'Width']);\n"
+       "        if (cs['border' + spec.side + 'Style'] === 'none' || !(w > 0)) return;\n"
+       "        out.push([id, cs['border' + spec.side + 'Color'], backdrop[0],\n"
+       "                  'non-text', null, false, backdrop[1]]);\n"
+       "      } else {\n"
+       "        if (!el.textContent || !el.textContent.trim()) return;\n"
+       "        out.push([id, cs.color, backdrop[0], null,\n"
+       "                  parseFloat(cs.fontSize),\n"
+       "                  parseInt(cs.fontWeight, 10) >= 700,\n"
+       "                  backdrop[1]]);\n"
+       "      }\n"
+       "    });\n"
+       "  }\n"
+       "  return out;\n"
+       "})()"))
+
+;; =============================================================================
 ;; Op → source
 ;; =============================================================================
 

@@ -412,6 +412,71 @@
    [:coverage/report-dir NonBlankString]])
 
 ;; =============================================================================
+;; Contrast: WCAG colour legibility
+;; =============================================================================
+
+(def Rgba
+  "An sRGB colour. Channels are bytes; alpha is 0.0-1.0, where 1.0 is opaque."
+  [:map {:closed true}
+   [:r [:int {:min 0 :max 255}]]
+   [:g [:int {:min 0 :max 255}]]
+   [:b [:int {:min 0 :max 255}]]
+   [:a [:double {:min 0.0 :max 1.0}]]])
+
+(def ContrastLevel
+  "WCAG conformance level a sample is judged at."
+  [:enum :aa :aaa])
+
+(def ContrastRole
+  "What a sample IS, which is what sets the bar it has to clear. `:non-text` is
+   WCAG 1.4.11: the boundary of anything a person operates."
+  [:enum :text :large-text :non-text])
+
+(def ContrastState
+  "Whether a sample cleared its bar. `:unknown` is not a pass: a colour that
+   could not be resolved was never measured."
+  [:enum :pass :fail :unknown])
+
+(def ContrastSample
+  "Authored: two colours, plus enough about the thing to know its bar.
+
+   Deliberately open, and permissive on colour. A value the page could not
+   resolve is a FINDING, not a config error, so it has to survive validation
+   long enough to be reported."
+  [:map
+   [:id {:optional true} [:maybe :keyword]]
+   [:foreground [:maybe :string]]
+   [:background [:maybe :string]]
+   [:role {:optional true} ContrastRole]
+   [:font-size-px {:optional true} [:maybe number?]]
+   [:bold? {:optional true} [:maybe :boolean]]])
+
+(def ContrastFinding
+  "One sample judged."
+  [:map {:closed true}
+   [:contrast/id [:maybe :keyword]]
+   [:contrast/role ContrastRole]
+   [:contrast/level ContrastLevel]
+   [:contrast/required [:maybe :double]]
+   [:contrast/measured {:optional true} :double]
+   [:contrast/foreground [:maybe :string]]
+   [:contrast/background [:maybe :string]]
+   [:contrast/state ContrastState]])
+
+(def ContrastReport
+  "Every sample judged, with the failures and the worst measurement to hand.
+
+   `:incomplete` is its own outcome rather than a pass: a run that could not
+   resolve some colours proved less than one that resolved them all."
+  [:map {:closed true}
+   [:contrast/level ContrastLevel]
+   [:contrast/findings [:vector ContrastFinding]]
+   [:contrast/failures [:vector ContrastFinding]]
+   [:contrast/unknown [:vector ContrastFinding]]
+   [:contrast/worst [:maybe :double]]
+   [:contrast/state [:enum :pass :fail :incomplete]]])
+
+;; =============================================================================
 ;; Manifest — normalized
 ;; =============================================================================
 
