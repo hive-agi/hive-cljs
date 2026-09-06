@@ -133,6 +133,7 @@
             :scenarios     (mapv normalize-scenario (:scenarios raw))
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
+                             :ignore-https-errors :viewport
                              :app-db-schema :app-db-check]))))
 
 (defn normalize-action
