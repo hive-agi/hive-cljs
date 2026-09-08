@@ -491,6 +491,139 @@
    [:contrast/state [:enum :pass :fail :incomplete]]])
 
 ;; =============================================================================
+;; Fit — does a laid-out thing stay inside the box it was given
+;; =============================================================================
+
+(def Box
+  "The area something was given to lay out in, in CSS pixels."
+  [:map {:closed true}
+   [:w [:double {:min 0.0}]]
+   [:h [:double {:min 0.0}]]])
+
+(def Extent
+  "The area something actually takes, in CSS pixels."
+  [:map {:closed true}
+   [:w [:double {:min 0.0}]]
+   [:h [:double {:min 0.0}]]])
+
+(def FitPolicy
+  "What the author declared should happen when a subject does not fit.
+
+   Closed by construction. A policy the checker does not recognise cannot be
+   honoured, so admitting one would let a document waive a gate with a word
+   that nothing reads."
+  [:enum :allow :shrink])
+
+(def FitRung
+  "The evidence layer a measurement was taken at.
+
+   :measured   read off a laid-out page by a layout engine
+   :estimated  computed from the document value by a box model
+
+   Carried on every measurement and every verdict, because the two do not
+   license the same claim: an estimate may WARN a build, only a measurement
+   may FAIL one."
+  [:enum :measured :estimated])
+
+(def FitState
+  "What a subject's measurement amounts to.
+
+   :ok            fits, and claimed nothing
+   :overflows     overflows in a way nothing declared, or shrinking cannot repair
+   :waived        overflows, and the subject declared :allow
+   :shrunk        overflows, declared :shrink, and fits at :fit/scale
+   :too-small     declared :shrink, but fitting would go under the readable floor
+   :stale-waiver  declares a policy for an overflow it no longer has
+   :unknown       the source could not model this subject at all"
+  [:enum :ok :overflows :waived :shrunk :too-small :stale-waiver :unknown])
+
+(def FitSeverity
+  "What a gate should do about one verdict, at the rung it was taken at."
+  [:enum :pass :warn :fail])
+
+(def FitFindingKind
+  "How a subject fails to fit. Open: a document model may overflow in ways this
+   library has not heard of, and an unknown kind must still be reportable."
+  :keyword)
+
+(def FitClip
+  "A descendant whose own box cuts its content off."
+  [:map {:closed true}
+   [:fit/tag [:maybe NonBlankString]]
+   [:fit/class [:maybe :string]]
+   [:fit/over-w [:double {:min 0.0}]]
+   [:fit/over-h [:double {:min 0.0}]]])
+
+(def FitFinding
+  "One way a subject fails to fit."
+  [:map
+   [:fit/kind FitFindingKind]
+   [:fit/by {:optional true} [:double {:min 0.0}]]
+   [:fit/clip {:optional true} FitClip]])
+
+(def FitMeasurement
+  "One subject as a source reports it.
+
+   `:fit/margin` is the source's own uncertainty about `:fit/extent`, in
+   pixels. A measured source states 0; an estimator states what its box model
+   could be wrong by, and the gate refuses to fail a build on a finding that
+   falls inside that band.
+
+   `:fit/kinds` is what this subject drew on from the document model, which is
+   what a coverage check compares against an independently derived universe.
+   `:fit/modelled?` false says the source could not model the subject at all."
+  [:map {:closed true}
+   [:fit/id NonBlankString]
+   [:fit/rung FitRung]
+   [:fit/box Box]
+   [:fit/extent {:optional true} Extent]
+   [:fit/policy {:optional true} [:maybe FitPolicy]]
+   [:fit/clipped {:optional true} [:vector FitClip]]
+   [:fit/margin {:optional true} [:double {:min 0.0}]]
+   [:fit/kinds {:optional true} [:set :keyword]]
+   [:fit/modelled? {:optional true} :boolean]])
+
+(def FitVerdict
+  "One measurement judged."
+  [:map {:closed true}
+   [:fit/id NonBlankString]
+   [:fit/rung FitRung]
+   [:fit/state FitState]
+   [:fit/severity FitSeverity]
+   [:fit/findings [:vector FitFinding]]
+   [:fit/margin [:double {:min 0.0}]]
+   [:fit/scale {:optional true} [:double {:min 0.0}]]])
+
+(def FitReport
+  "Every subject judged, with the failures and the warnings to hand.
+
+   `:fit/state` is the worst severity any verdict carries. A report over no
+   measurements at all is `:unavailable` and never a pass: a gate that judged
+   nothing proved nothing."
+  [:map {:closed true}
+   [:fit/rung FitRung]
+   [:fit/verdicts [:vector FitVerdict]]
+   [:fit/failures [:vector FitVerdict]]
+   [:fit/warnings [:vector FitVerdict]]
+   [:fit/tally [:map-of FitState [:int {:min 0}]]]
+   [:fit/state [:enum :pass :warn :fail :unavailable]]])
+
+(def FitCoverage
+  "What the document model admits, against what the source actually reached.
+
+   `:fit/universe` MUST be derived from a source independent of the thing being
+   checked. Deriving it from the estimator's own arms makes the assertion
+   `X is a subset of X`, which holds for every X including the ones missing the
+   members that matter."
+  [:map {:closed true}
+   [:fit/universe [:set :keyword]]
+   [:fit/reached [:set :keyword]]
+   [:fit/missing [:vector :keyword]]
+   [:fit/exempt [:map-of :keyword :string]]
+   [:fit/stale-exemptions [:vector :keyword]]
+   [:fit/state [:enum :pass :fail :unavailable]]])
+
+;; =============================================================================
 ;; Manifest — normalized
 ;; =============================================================================
 

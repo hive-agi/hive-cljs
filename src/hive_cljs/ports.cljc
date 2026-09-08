@@ -208,6 +208,48 @@
     "Release a runtime channel this toolchain opened. Idempotent; never throws."))
 
 ;; =============================================================================
+;; IFitSource — where fit measurements come from
+;; =============================================================================
+
+(defprotocol IFitSource
+  "Produce `schema/FitMeasurement`s for the subjects of one document.
+
+   The seam that lets `hive-cljs.fit` judge without knowing what a subject is.
+   A consumer ships at least one implementation, and usually two: one that
+   reads a laid-out page through a browser channel, and one that estimates from
+   the document value with no browser at all. They answer the same protocol and
+   are judged by the same code, so the two rungs cannot drift into two
+   definitions of what fitting means."
+
+  (fit-rung [this]
+    "The `schema/FitRung` this source is ENTITLED to claim.
+
+     Not a label the caller chooses: a source that ran a box model says
+     :estimated however confident it is, and the gate's willingness to fail a
+     build follows from this answer.")
+
+  (fit-measurements [this]
+    "Return [schema/FitMeasurement ...] for every subject this source sees.
+
+     A subject the source cannot model must appear with :fit/modelled? false
+     rather than be omitted. An omitted subject is indistinguishable from one
+     that fits, which is how a gate goes quietly blind."))
+
+(defprotocol IFitUniverse
+  "The set of kinds a document model admits, derived INDEPENDENTLY of any fit
+   source.
+
+   Separate from `IFitSource` on purpose, and this is the whole point of the
+   protocol existing at all. A coverage gate whose universe comes from the
+   thing being checked asserts `X is a subset of X` and passes for every X. So
+   the universe has to be answerable by the document model itself -- a content
+   registry, a multimethod's dispatch table, a schema -- and a consumer that
+   cannot answer it independently should not claim coverage."
+
+  (fit-universe [this]
+    "Every kind the document model admits, as a set of keywords."))
+
+;; =============================================================================
 ;; Predicates
 ;; =============================================================================
 
@@ -227,3 +269,6 @@
 (defn page-bootstrap? [x] (satisfies? IPageBootstrap x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))
+
+(defn fit-source? [x] (satisfies? IFitSource x))
+(defn fit-universe? [x] (satisfies? IFitUniverse x))
