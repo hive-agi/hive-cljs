@@ -70,6 +70,7 @@ decided by `:hive.cljs/toolchain`:
 | re-frame | `:eval-cljs` `:dispatch` `:expect-sub` `:expect-db` `:wait-for-sub` `:wait-for-db` | a ClojureScript app over the shadow nREPL (`:shadow-cljs`) |
 | JavaScript | `:eval-js` `:expect-js` `:wait-for-js` | **any** app, evaluated in the page (`:browser`, and any driver that can evaluate) |
 | probe | `:expect-state` `:wait-for-state` | any app that exposes a getter to the injected probe |
+| layout | `:expect-fits` | **any** app: a named question about the rendered box, with no expression to author |
 
 A step whose vocabulary the connected channel does not speak reports
 `:incomplete` — never a pass, and never a failure of your application:
@@ -188,6 +189,53 @@ functions become `"#function"`, DOM nodes `"#node:div"`, `Date`s ISO strings,
 `Map`s objects, `Set`s arrays. Cycles become `"#cycle"` and nesting stops at
 depth 12 — a store graph much larger than the value under test would otherwise
 hang the assertion rather than fail it.
+
+### The layout vocabulary
+
+An overflow check is the same question every time, so it is a step kind rather
+than an expression each manifest re-authors:
+
+```clojure
+[[:goto "/certificado"]
+ [:wait-for "main"]
+ [:expect-fits "main"]
+ [:expect-fits "h1"]]
+```
+
+| Step | Passes when |
+|---|---|
+| `[:expect-fits "main"]` | every element the selector matches stays inside its box |
+
+Two questions, because an element can overflow in two directions and only one of
+them shows up in a scroll size. It must sit inside the **viewport**
+horizontally, and it must not clip its own content.
+
+Rectangles rather than `scrollWidth <= clientWidth` alone: an inline element
+reports both as `0`, so that comparison is `0 <= 0` and passes on every input,
+which is how a fit gate gets written, run, and is never able to fail. The
+self-clip half is therefore asked only of elements that have a box; the
+containment half is asked of every element that has a rectangle. A one-pixel
+tolerance absorbs sub-pixel rounding.
+
+Three answers, and the third is the point:
+
+| | reports |
+|---|---|
+| everything fits | the NUMBER of elements measured, so a pass says how much was looked at |
+| something overflows | `false`, which fails the step |
+| nothing was measurable | throws: the selector matched nothing, or matched only elements with no rectangle |
+
+That last row is why this is not `[:expect-js "…querySelectorAll…"]` with a
+count of zero: a gate that could not look must never read as a gate that looked
+and was happy.
+
+Pair it with a per-scenario `:viewport` to ask the same question at several
+widths; the selector is then the only thing that varies:
+
+```clojure
+{:id :phone   :viewport {:width 390 :height 844}  :steps [[:goto "/"] [:expect-fits "main"]]}
+{:id :desktop :viewport {:width 1440 :height 900} :steps [[:goto "/"] [:expect-fits "main"]]}
+```
 
 ### Condition-waits on state
 
