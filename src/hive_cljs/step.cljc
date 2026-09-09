@@ -96,11 +96,14 @@
 (def runtime-rules
   "Steps routed to ICljsEval instead of the browser.
 
-   Three vocabularies, one channel. The `-sub`/`-db` kinds are re-frame's and
+   Four vocabularies, one channel. The `-sub`/`-db` kinds are re-frame's and
    only a ClojureScript runtime renders them. The `-js` kinds are every stack's,
    because a page is a page whatever compiled it. The `-state` kinds are every
    stack's too, but read through the injected probe contract instead of a
    per-app expression — which is what lets one scenario vocabulary span stacks.
+   `:expect-fits` is the fourth: a NAMED question about layout, so a manifest
+   asks it by selector instead of carrying a copy of the measuring JavaScript
+   once per viewport.
    A channel that cannot render a kind reports `:incomplete`.
 
    The `:wait-for-*` kinds are the condition-wait counterpart of the DOM-level
@@ -115,6 +118,7 @@
    (runtime-rule :eval-js 1)
    (runtime-rule :expect-js 1)
    (runtime-rule :wait-for-js 1)
+   (runtime-rule :expect-fits 1)
    (runtime-rule :expect-state 2)
    (runtime-rule :wait-for-state 2)])
 
@@ -125,7 +129,7 @@
 (def assertion-kinds
   "Runtime kinds whose returned value IS the assertion — a falsy answer fails
    the step rather than merely being reported."
-  #{:expect-sub :expect-db :expect-js :expect-state})
+  #{:expect-sub :expect-db :expect-js :expect-fits :expect-state})
 
 (def poll-kinds
   "Runtime kinds that poll a condition until it holds instead of asserting it

@@ -383,8 +383,8 @@
 (def read-only-kinds
   "Steps that only observe — nothing they do can corrupt app-db."
   #{:expect-text :expect-value :expect-visible :expect-hidden :expect-count
-    :expect-url :expect-sub :expect-db :wait-for :wait-for-sub :wait-for-db
-    :wait-ms :screenshot})
+    :expect-url :expect-sub :expect-db :expect-fits :wait-for :wait-for-sub
+    :wait-for-db :wait-ms :screenshot})
 
 (defn invariant-applies?
   "True when the configured app-db invariant should be asserted after `op`."

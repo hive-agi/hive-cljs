@@ -29,6 +29,22 @@
     (is (= :runtime (step/channel-of [:dispatch [:evt]])))
     (is (= :runtime (step/channel-of [:eval-cljs "(+ 1 2)"])))))
 
+(deftest a-fit-question-is-a-runtime-assertion-carrying-only-a-selector
+  (testing "it compiles, conforms, and is evaluated in the page"
+    (let [res (step/compile-step [:expect-fits ".memorial-message-choice"])]
+      (is (r/ok? res))
+      (is (m/validate s/Op (:ok res)) (pr-str (m/explain s/Op (:ok res))))
+      (is (= :runtime (:op/channel (:ok res))))))
+
+  (testing "the selector is the whole argument"
+    (is (= :step/malformed (:error (step/compile-step [:expect-fits]))))
+    (is (= :step/malformed (:error (step/compile-step [:expect-fits ".a" ".b"])))))
+
+  (testing "a falsy answer fails the step rather than being merely reported"
+    (is (contains? step/assertion-kinds :expect-fits))
+    (is (not (contains? step/poll-kinds :expect-fits))
+        "it asserts once; there is no :wait-for-fits")))
+
 (deftest malformed-steps-are-typed-errors
   (is (= :step/not-a-vector (:error (step/compile-step {:kind :goto}))))
   (is (= :step/no-kind (:error (step/compile-step ["goto" "/x"]))))

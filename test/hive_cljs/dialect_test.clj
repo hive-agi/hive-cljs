@@ -178,6 +178,44 @@
     (testing "and it never appears unescaped, which is what breaking out means"
       (is (not (str/includes? source "selector:\"a\");"))))))
 
+(deftest expect-fits-asks-one-named-question-instead-of-a-copied-predicate
+  ;; The manifest that motivated this carried the same overflow predicate six
+  ;; times, once per viewport, because a viewport is per scenario. A step kind
+  ;; makes the SELECTOR the only thing that varies.
+  (let [source (js/assertion-source (op :expect-fits ".card"))]
+    (testing "the selector reaches the page as data, inside its own literal"
+      (is (str/includes? source "const sel = \".card\";")))
+
+    (testing "rectangles, because an inline element reports scrollWidth 0 and
+              `scrollWidth <= clientWidth` is then 0 <= 0 on every input"
+      (is (str/includes? source "getBoundingClientRect")))
+
+    (testing "so the self-clip half is asked only of elements that have a box"
+      (is (str/includes?
+           source
+           "el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol")))
+
+    (testing "nothing measurable THROWS — a gate that could not look must never
+              read as a gate that looked and was happy"
+      (is (str/includes? source "throw new Error('expect-fits: nothing matches ' + sel)"))
+      (is (str/includes? source "none has a rectangle")))
+
+    (testing "an overflow answers false, which the runtime channel fails on"
+      (is (str/includes? source "return over ? false : measured;")))))
+
+(deftest a-fits-selector-cannot-smuggle-source-into-the-page
+  (let [source (js/fits-source "a\"); alert(1); //")]
+    (is (str/includes? source "const sel = \"a\\\"); alert(1); //\";")
+        "the quote that would close the literal is escaped, so the rest stays data")
+    (is (not (str/includes? source "const sel = \"a\");"))
+        "and it never appears unescaped, which is what breaking out means")))
+
+(deftest a-page-is-a-page-whatever-compiled-it
+  ;; The same argument the JavaScript kinds already carry: a shadow-cljs app
+  ;; renders to a DOM, so it can be asked whether that DOM fits.
+  (is (= (str "(js->clj (js/eval " (pr-str (js/fits-source "html")) "))")
+         (re-frame/assertion-source (op :expect-fits "html")))))
+
 ;; =============================================================================
 ;; The architecture claim itself
 ;; =============================================================================

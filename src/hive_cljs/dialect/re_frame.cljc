@@ -132,12 +132,13 @@
   (let [[a b] (:op/args op)
         frame (:op/frame op)]
     (case (:op/kind op)
-      :eval-cljs  (form->string a)
-      :dispatch   (dispatch-form a frame)
-      :expect-sub (predicate-call b (sub-form a frame))
-      :expect-db  (predicate-call b (db-form a frame))
-      :eval-js    (js-form (jsd/expr a))
-      :expect-js  (js-form (jsd/truthy-value (jsd/expr a)))
+      :eval-cljs   (form->string a)
+      :dispatch    (dispatch-form a frame)
+      :expect-sub  (predicate-call b (sub-form a frame))
+      :expect-db   (predicate-call b (db-form a frame))
+      :eval-js     (js-form (jsd/expr a))
+      :expect-js   (js-form (jsd/truthy-value (jsd/expr a)))
+      :expect-fits (js-form (jsd/fits-source a))
       nil)))
 
 (defn probe-source

@@ -116,6 +116,48 @@
   [path pred]
   (str "(() => { const v = " (read-source path) "; return [!!(" (expr pred) "), v]; })()"))
 
+(defn fits-source
+  "JS asking whether everything `selector` matches stays inside its box.
+
+   Two questions, because an element can overflow in two directions and only
+   one of them is visible in a scroll size. It must sit inside the VIEWPORT
+   horizontally, and it must not clip its own content.
+
+   Rectangles rather than `scrollWidth <= clientWidth` alone: an INLINE element
+   reports both as 0, so that comparison is `0 <= 0` and passes on every input,
+   which is how a fit gate can be written, run, and never able to fail. The
+   self-clip half is therefore asked only of elements that have a box, and the
+   containment half is asked of every element that has a rectangle.
+
+   Three answers, and the third is the point. All fit: the number measured,
+   which is truthy and says how much was looked at. Something overflows:
+   `false`, which the runtime channel reads as a failed assertion. NOTHING was
+   measurable — the selector matched no element, or matched only elements with
+   no rectangle: it THROWS, so the step reports an error rather than a pass. A
+   gate that could not look must never read as a gate that looked and was
+   happy."
+  ([selector] (fits-source selector 1))
+  ([selector tolerance]
+   (let [sel (pr-str selector)]
+     (str "(() => {\n"
+          "  const tol = " (double tolerance) ";\n"
+          "  const sel = " sel ";\n"
+          "  const els = Array.from(document.querySelectorAll(sel));\n"
+          "  if (!els.length) throw new Error('expect-fits: nothing matches ' + sel);\n"
+          "  const vw = window.innerWidth;\n"
+          "  let measured = 0, over = 0;\n"
+          "  for (const el of els) {\n"
+          "    const r = el.getBoundingClientRect();\n"
+          "    if (!(r.width > 0) || !(r.height > 0)) continue;\n"
+          "    measured++;\n"
+          "    if (r.right > vw + tol || r.left < -tol) { over++; continue; }\n"
+          "    if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol) over++;\n"
+          "  }\n"
+          "  if (!measured) throw new Error('expect-fits: ' + els.length +\n"
+          "    ' element(s) match ' + sel + ' and none has a rectangle');\n"
+          "  return over ? false : measured;\n"
+          "})()"))))
+
 ;; =============================================================================
 ;; Contrast sampling
 ;; =============================================================================
@@ -231,6 +273,7 @@
     (case (:op/kind op)
       :eval-js      (expr a)
       :expect-js    (truthy-value (expr a))
+      :expect-fits  (fits-source a)
       :expect-state (state-assertion a b)
       nil)))
 
