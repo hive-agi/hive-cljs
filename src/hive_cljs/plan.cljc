@@ -41,7 +41,8 @@
              :timeout-ms (:timeout-ms e2e)
              :ignore-https-errors (boolean (:ignore-https-errors e2e))
              :artifacts-dir (:artifacts-dir e2e)}
-      (:viewport e2e) (assoc :viewport (:viewport e2e)))))
+      (:viewport e2e) (assoc :viewport (:viewport e2e))
+      (:iframe e2e)   (assoc :iframe (:iframe e2e)))))
 
 (defn runtime-opts
   "Runtime-channel options for a run — what the boundary needs that the browser
@@ -80,8 +81,9 @@
    URLs resolve against the named build's `:http-port` when it declares one,
    else against the manifest-wide :base-url. A frame id (scenario :frame, else
    e2e :frame) is stamped onto runtime ops so re-frame2 frame-scoped apps get
-   frame-pinned subscribe/dispatch/db reads. A scenario :viewport overrides
-   the manifest-wide one for that run's session."
+   frame-pinned subscribe/dispatch/db reads. A scenario :viewport and a
+   scenario :iframe each override the manifest-wide one for that run's
+   session."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
    (let [base-url (scenario-base-url manifest scenario)
@@ -89,7 +91,8 @@
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
          session  (cond-> (assoc (session-opts manifest) :base-url base-url)
-                    (:viewport scenario) (assoc :viewport (:viewport scenario)))]
+                    (:viewport scenario) (assoc :viewport (:viewport scenario))
+                    (:iframe scenario)   (assoc :iframe (:iframe scenario)))]
      (if (r/err? compiled)
        compiled
        (r/ok (cond-> {:plan/scenario (:id scenario)

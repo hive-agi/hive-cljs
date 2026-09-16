@@ -12,7 +12,7 @@
             [hive-cljs.ports :as ports]
             [hive-dsl.result :as r])
   (:import [com.microsoft.playwright Playwright Browser BrowserType$LaunchOptions
-            BrowserContext Page Page$ScreenshotOptions Locator]
+            BrowserContext Page Page$ScreenshotOptions Locator Frame ElementHandle]
            [java.nio.file Paths]
 [com.microsoft.playwright Browser$NewContextOptions]))
 
@@ -59,6 +59,46 @@
 
 (defn- ^Page page-of [session] (:page session))
 
+(defn dom-root
+  "What selector ops and page expressions address: the page itself, or the
+   document inside the session's `:iframe`.
+
+   A composition host (a slide player, a preview pane, an embedded editor)
+   renders the application under test in a CHILD document, so `document` in the
+   top page belongs to the host and every selector written against it silently
+   addresses the wrong page. Playwright's css engine pierces open shadow roots,
+   so one selector reaches a player that wraps its iframe in a custom element.
+
+   A `Frame` rather than a `FrameLocator`, because Frame mirrors Page's whole
+   selector API: the same `click`/`fill`/`textContent`/`locator`/`evaluate`
+   calls work against either, which is what lets ONE option scope both
+   channels instead of only the JavaScript one.
+
+   A configured iframe that cannot be resolved THROWS. It must never fall back
+   to the top page: falling back would answer against the host's document,
+   which is exactly the confusion the option exists to remove, and it would do
+   so while reporting a pass."
+  [session]
+  (if-let [sel (:iframe session)]
+    (let [^ElementHandle handle (.querySelector (page-of session) sel)]
+      (when-not handle
+        (throw (ex-info (str "iframe " (pr-str sel) " matches nothing on this page")
+                        {:selector sel})))
+      (or (.contentFrame handle)
+          (throw (ex-info (str "iframe " (pr-str sel) " is not a frame")
+                          {:selector sel}))))
+    (page-of session)))
+
+(defn eval-target
+  "`dom-root` as a Result, for the eval channel, which reports an
+   unresolvable iframe as a typed error rather than as a thrown step."
+  [session]
+  (try
+    (r/ok (dom-root session))
+    (catch Throwable e
+      (r/err :browser/iframe-unresolved
+             {:selector (:iframe session) :cause (.getMessage e)}))))
+
 (defmethod perform-op :goto
   [session {[url] :op/args}]
   (.navigate (page-of session) url)
@@ -76,37 +116,37 @@
 
 (defmethod perform-op :click
   [session {[sel] :op/args}]
-  (.click (page-of session) sel)
+  (.click (dom-root session) sel)
   (pass sel))
 
 (defmethod perform-op :fill
   [session {[sel value] :op/args}]
-  (.fill (page-of session) sel (str value))
+  (.fill (dom-root session) sel (str value))
   (pass sel))
 
 (defmethod perform-op :select
   [session {[sel value] :op/args}]
-  (.selectOption (page-of session) sel (str value))
+  (.selectOption (dom-root session) sel (str value))
   (pass sel))
 
 (defmethod perform-op :check
   [session {[sel] :op/args}]
-  (.check (page-of session) sel)
+  (.check (dom-root session) sel)
   (pass sel))
 
 (defmethod perform-op :press
   [session {[sel k] :op/args}]
-  (.press (page-of session) sel (str k))
+  (.press (dom-root session) sel (str k))
   (pass (str sel " " k)))
 
 (defmethod perform-op :hover
   [session {[sel] :op/args}]
-  (.hover (page-of session) sel)
+  (.hover (dom-root session) sel)
   (pass sel))
 
 (defmethod perform-op :wait-for
   [session {[sel] :op/args}]
-  (.waitForSelector (page-of session) sel)
+  (.waitForSelector (dom-root session) sel)
   (pass sel))
 
 (defmethod perform-op :wait-ms
@@ -116,7 +156,7 @@
 
 (defmethod perform-op :expect-text
   [session {[sel expected] :op/args}]
-  (let [actual (.textContent (page-of session) sel)]
+  (let [actual (.textContent (dom-root session) sel)]
     (if (and actual (str/includes? actual (str expected)))
       (pass)
       (fail (str "expected " (pr-str expected) " in " sel
@@ -124,7 +164,7 @@
 
 (defmethod perform-op :expect-value
   [session {[sel expected] :op/args}]
-  (let [actual (.inputValue (page-of session) sel)]
+  (let [actual (.inputValue (dom-root session) sel)]
     (if (= (str expected) (str actual))
       (pass)
       (fail (str "expected value " (pr-str expected) " in " sel
@@ -132,23 +172,34 @@
 
 (defmethod perform-op :expect-visible
   [session {[sel] :op/args}]
-  (if (.isVisible (page-of session) sel)
+  (if (.isVisible (dom-root session) sel)
     (pass)
     (fail (str sel " is not visible"))))
 
 (defmethod perform-op :expect-hidden
   [session {[sel] :op/args}]
-  (if (.isHidden (page-of session) sel)
+  (if (.isHidden (dom-root session) sel)
     (pass)
     (fail (str sel " is visible"))))
 
 (defmethod perform-op :expect-count
   [session {[sel expected] :op/args}]
-  (let [^Locator loc (.locator (page-of session) sel)
+  (let [^Locator loc (.locator (dom-root session) sel)
         actual (.count loc)]
     (if (= (long expected) (long actual))
       (pass)
       (fail (str "expected " expected " of " sel ", got " actual)))))
+
+(defmethod perform-op :expect-attr
+  [session {[sel attr expected] :op/args}]
+  (let [actual (.getAttribute (dom-root session) sel (name attr))]
+    (if (= (str expected) (str actual))
+      (pass)
+      ;; An ABSENT attribute and one holding the wrong value are different
+      ;; mistakes, and the report has to say which: `nil` is a selector or a
+      ;; spelling to fix, a wrong value is the application to fix.
+      (fail (str "expected " (name attr) "=" (pr-str expected) " on " sel
+                 ", got " (if (nil? actual) "no such attribute" (pr-str actual)))))))
 
 (defmethod perform-op :expect-url
   [session {[expected] :op/args}]
@@ -186,7 +237,8 @@
 
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
-  (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors viewport]}]
+  (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors
+                            viewport iframe]}]
     (try
       (let [^Playwright pw (Playwright/create)
             br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless))
@@ -197,8 +249,9 @@
             ^Page page (.newPage ctx)]
         (when timeout-ms
           (.setDefaultTimeout page (double timeout-ms)))
-        (let [session {:pw pw :browser br :context ctx :page page
-                       :artifacts-dir (or artifacts-dir ".hive-cljs/artifacts")}]
+        (let [session (cond-> {:pw pw :browser br :context ctx :page page
+                               :artifacts-dir (or artifacts-dir ".hive-cljs/artifacts")}
+                        iframe (assoc :iframe iframe))]
           (swap! pw-atom conj session)
           (r/ok session)))
       (catch Throwable e
@@ -237,8 +290,11 @@
   ports/IPageEval
   (eval-in-page [_ session source]
     (try
-      (let [v (js->data (.evaluate (page-of session) source))]
-        (r/ok {:value v :printed (pr-str v)}))
+      (let [target (eval-target session)]
+        (if (r/err? target)
+          target
+          (let [v (js->data (.evaluate (:ok target) source))]
+            (r/ok {:value v :printed (pr-str v)}))))
       (catch Throwable e
         (r/err :browser/eval-failed
                {:cause (.getMessage e) :source source})))))

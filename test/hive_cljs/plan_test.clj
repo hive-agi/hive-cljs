@@ -70,6 +70,32 @@
       (is (true? (:ignore-https-errors (session m adhoc))))
       (is (false? (:ignore-https-errors (session fix/manifest adhoc)))))))
 
+(deftest an-iframe-scopes-a-run-and-a-scenario-overrides-the-manifests
+  ;; A composition host renders the app under test in a child document, so the
+  ;; selector every step carries has to address THAT document. The knob travels
+  ;; the same road :viewport does, and the same trap is here: an allow-list in
+  ;; normalize-scenario drops a knob before the plan can see it.
+  (let [m (:ok (manifest/parse (assoc-in fix/raw [:hive.cljs/e2e :iframe] "#player")
+                               "/tmp/x"))
+        session (fn [manifest scenario] (:plan/session (:ok (plan/build-plan manifest scenario))))
+        adhoc {:id :adhoc :steps [[:goto "/"]]}
+        nested {:id :nested :iframe "hyperframes-player iframe" :steps [[:goto "/"]]}]
+    (testing "none declared, so the session carries none and steps address the page"
+      (is (not (contains? (session fix/manifest adhoc) :iframe))))
+    (testing "the manifest-wide iframe reaches a scenario that declares none"
+      (is (= "#player" (:iframe (session m adhoc)))))
+    (testing "a scenario's own iframe wins over the manifest's"
+      (is (= "hyperframes-player iframe" (:iframe (session m nested)))))
+    (testing "and it survives manifest parsing, not only a hand-built scenario"
+      (let [m2 (:ok (manifest/parse (assoc-in fix/raw [:hive.cljs/e2e :scenarios] [nested]) "/tmp/x"))]
+        (is (= "hyperframes-player iframe" (:iframe (first (manifest/scenarios m2)))))
+        (is (= "hyperframes-player iframe"
+               (:iframe (:plan/session (:ok (plan/plan-for-id m2 :nested))))))))
+    (testing "a scenario carrying one still conforms to the schema"
+      (let [p (:ok (plan/build-plan m nested))]
+        (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p))))
+      (is (m/validate s/Scenario nested) (pr-str (m/explain s/Scenario nested))))))
+
 (deftest a-scenario-resolves-urls-against-the-port-of-the-build-it-names
   (let [m (:ok (manifest/parse (-> fix/raw
                                    (assoc-in [:hive.cljs/builds :scene] {:http-port 8087})

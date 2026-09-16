@@ -219,6 +219,8 @@ verdict between file writes.
  :headless       true
  :timeout-ms     15000
  :poll-ms        250                      ; condition-wait poll interval
+ :viewport       {:width 1280 :height 800} ; optional; a scenario may override
+ :iframe         "#player"                ; optional; scopes steps to a child document
  :artifacts-dir  "<root>/.hive-cljs/artifacts"
  :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
  :app-db-schema  my.app.schema/app-db     ; optional — asserted between steps
@@ -260,6 +262,44 @@ never a last-one-wins merge.
 
 Every scenario file joins `:manifest/sources`, so editing one invalidates the
 cached session exactly like editing the manifest: the loop is edit → run.
+
+#### `:iframe`, when the application under test is a child document
+
+A composition host (a slide player, a preview pane, an embedded editor) renders
+the application inside an iframe. `document` in the top page is then the
+**host's**, so every selector and every probe silently addresses the wrong page:
+
+```clojure
+;; without :iframe, each step has to carry its own way in
+[:expect-js "document.querySelector('hyperframes-player')
+               .shadowRoot.querySelector('iframe')
+               .contentDocument.querySelectorAll('.fragment.visible').length === 1"]
+
+;; with it, the step is the question again
+[:expect-count ".fragment.visible" 1]
+```
+
+Set it on `:hive.cljs/e2e` for the whole manifest, or on one scenario to
+override:
+
+```clojure
+{:id :deck :iframe "hyperframes-player iframe" :steps [[:goto "/"] …]}
+```
+
+It scopes **both** channels: the DOM steps and the JavaScript ones evaluate
+against that frame's document. Navigation is not scoped, because you navigate
+the page the host is served on: `:goto`, `:back`, `:reload`, `:expect-url` and
+`:screenshot` stay with the top page.
+
+Playwright's css engine pierces open shadow roots, so one selector reaches a
+player that wraps its iframe in a custom element; no `shadowRoot` hop is needed.
+
+A selector that resolves to nothing is an **error**, never a quiet fallback to
+the top page. Falling back would answer every step against the host's document
+while reporting a pass, which is the confusion this option exists to remove.
+
+Named `:iframe` and not `:frame`, because `:frame` is already the re-frame2
+frame id.
 
 #### `:app-db-schema` — one schema, asserted between steps
 

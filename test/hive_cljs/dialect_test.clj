@@ -37,6 +37,28 @@
          (re-frame/assertion-source (op :eval-cljs "(js/alert 1)")))
       "an authored expression passes through untranslated"))
 
+(deftest a-manifest-is-edn-so-a-step-argument-may-be-a-FORM
+  ;; "eval-cljs should need to push a clj string, that's bad design." A source
+  ;; string inside EDN costs escaping, editor support, linting and indexing: a
+  ;; typo in it ships as a runtime error. The manifest is already EDN, so the
+  ;; form can simply BE the argument, and :dispatch has always taken one.
+  (testing "a form renders as its own source"
+    (is (= "(+ 1 2)" (re-frame/assertion-source (op :eval-cljs '(+ 1 2))))))
+
+  (testing "a predicate reads as a symbol or a fn form, not only as text"
+    (is (= "(some? @(re-frame.core/subscribe [:user]))"
+           (re-frame/assertion-source (op :expect-sub [:user] 'some?))))
+    (is (= "((fn [v] (= v \"pedro\")) (get-in @re-frame.db/app-db [:user :name]))"
+           (re-frame/assertion-source
+            (op :expect-db [:user :name] '(fn [v] (= v "pedro"))))))
+    (is (= "(let [v @(re-frame.core/subscribe [:x])] [(boolean (seq v)) v])"
+           (re-frame/probe-source (op :wait-for-sub [:x] 'seq)))))
+
+  (testing "and the string spelling still works, because #(…) and #\"…\" have no
+            EDN form and must stay authorable"
+    (is (= (re-frame/assertion-source (op :expect-sub [:user] 'some?))
+           (re-frame/assertion-source (op :expect-sub [:user] "some?"))))))
+
 (deftest the-re-frame-dialect-also-renders-the-javascript-kinds
   ;; A page compiled from ClojureScript is still a page: the stack-agnostic
   ;; kinds render through js/eval with the JS dialect's own truthiness, so one

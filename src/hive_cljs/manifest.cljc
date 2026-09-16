@@ -105,6 +105,7 @@
     (:build raw)    (assoc :build (:build raw))
     (:frame raw)    (assoc :frame (:frame raw))
     (:viewport raw) (assoc :viewport (:viewport raw))
+    (:iframe raw)   (assoc :iframe (:iframe raw))
     (:doc raw)      (assoc :doc (:doc raw))
     (seq (:tags raw)) (assoc :tags (set (:tags raw)))))
 
@@ -134,7 +135,7 @@
             :scenarios     (mapv normalize-scenario (:scenarios raw))
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
-                             :ignore-https-errors :viewport
+                             :ignore-https-errors :viewport :iframe
                              :app-db-schema :app-db-check]))))
 
 (defn normalize-action

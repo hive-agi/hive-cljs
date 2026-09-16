@@ -128,6 +128,7 @@
    [:build {:optional true} BuildId]
    [:frame {:optional true} :keyword]
    [:viewport {:optional true} Viewport]
+   [:iframe {:optional true} NonBlankString]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -182,6 +183,12 @@
    ;; public origin.
    [:ignore-https-errors {:optional true} :boolean]
    [:viewport {:optional true} Viewport]
+   ;; Selector for an iframe that runtime JavaScript is evaluated INSIDE. A
+   ;; composition host (a slide player, a preview pane, an embedded editor)
+   ;; renders the application under test in a child document, so `document`
+   ;; in the top page is the host's, not the app's. Named :iframe rather than
+   ;; :frame because :frame is already the re-frame2 frame id.
+   [:iframe {:optional true} NonBlankString]
    [:timeout-ms Millis]
    [:poll-ms Millis]
    [:frame {:optional true} :keyword]

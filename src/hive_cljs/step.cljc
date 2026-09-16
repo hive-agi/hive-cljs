@@ -91,6 +91,7 @@
    (browser-rule :expect-visible 1)
    (browser-rule :expect-hidden 1)
    (browser-rule :expect-count 2)
+   (browser-rule :expect-attr 3)
    (browser-rule :expect-url 1)])
 
 (def runtime-rules

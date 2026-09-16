@@ -1,5 +1,6 @@
 (ns hive-cljs.step-test
   (:require [clojure.test :refer [deftest is testing]]
+            [hive-cljs.boundary :as boundary]
             [hive-cljs.step :as step]
             [hive-cljs.ports :as ports]
             [hive-dsl.result :as r]
@@ -44,6 +45,22 @@
     (is (contains? step/assertion-kinds :expect-fits))
     (is (not (contains? step/poll-kinds :expect-fits))
         "it asserts once; there is no :wait-for-fits")))
+
+(deftest an-attribute-question-is-a-browser-step-not-a-javascript-blob
+  ;; The last common DOM question with no step of its own, so every manifest
+  ;; that asked it reached for :expect-js and a querySelector expression.
+  (testing "it compiles onto the DOM channel"
+    (let [res (step/compile-step [:expect-attr "#menu" "aria-expanded" "true"])]
+      (is (r/ok? res))
+      (is (m/validate s/Op (:ok res)) (pr-str (m/explain s/Op (:ok res))))
+      (is (= :browser (:op/channel (:ok res))))))
+
+  (testing "selector, attribute, value: all three are required"
+    (is (= :step/malformed (:error (step/compile-step [:expect-attr "#a" "href"]))))
+    (is (= :step/malformed (:error (step/compile-step [:expect-attr "#a"])))))
+
+  (testing "it only observes, so an app-db invariant need not be re-asserted after it"
+    (is (contains? boundary/read-only-kinds :expect-attr))))
 
 (deftest malformed-steps-are-typed-errors
   (is (= :step/not-a-vector (:error (step/compile-step {:kind :goto}))))

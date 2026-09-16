@@ -12,6 +12,12 @@ Each step is routed to one of two channels:
 One scenario mixes both freely. That is the point: `:expect-text` proves what the
 user sees, `:expect-sub` proves what the app believes.
 
+Both channels address the page the session opened. When the application under
+test is rendered inside an iframe (a slide player, a preview pane, an embedded
+editor), point `:iframe` at it and every selector and expression below resolves
+in that document instead: see
+[configuration.md](configuration.md#iframe-when-the-application-under-test-is-a-child-document).
+
 ## Browser steps
 
 ### Navigation
@@ -49,7 +55,12 @@ user sees, `:expect-sub` proves what the app believes.
 | `[:expect-visible "#chart"]` | element is visible |
 | `[:expect-hidden "#hi"]` | element is absent or hidden |
 | `[:expect-count ".row" 3]` | selector matches exactly N elements |
+| `[:expect-attr "#menu" "aria-expanded" "true"]` | attribute equals exactly |
 | `[:expect-url "/dashboard"]` | current URL CONTAINS the expected string |
+
+`:expect-attr` distinguishes an **absent** attribute from one holding the wrong
+value, because they are different mistakes: `no such attribute` is a selector or
+a spelling to fix, a wrong value is the application to fix.
 
 ### Artifacts
 
@@ -87,15 +98,32 @@ inherited when the project has one build).
 
 | Step | Evaluates |
 |---|---|
-| `[:eval-cljs "(+ 1 2)"]` | the form; passes if it returns without error |
+| `[:eval-cljs (+ 1 2)]` | the form; passes if it returns without error |
 | `[:dispatch [:login "pedro"]]` | `(re-frame.core/dispatch-sync [:login "pedro"])` |
 | `[:expect-sub [:current-user] "some?"]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
 | `[:expect-db [:user :name] "some?"]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
 | `[:wait-for-sub [:selected] "some?"]` | the same, polled until it holds |
 | `[:wait-for-db [:items] "seq"]` | the same, polled until it holds |
 
-The predicate is source text, so any expression works:
-`"#(= % \"pedro\")"`, `"string?"`, `"#(> (count %) 3)"`.
+#### A form is the preferred spelling; a string is the escape hatch
+
+The manifest is EDN, so a step argument can simply **be** the form. Prefer that:
+a source string costs escaping, editor support, linting and indexing, and a typo
+inside one ships as a runtime error rather than failing to read.
+
+```clojure
+[:eval-cljs (my.app/reset!)]                       ; a form
+[:expect-sub [:current-user] some?]                ; a symbol
+[:expect-db [:user :name] (fn [v] (= v "pedro"))]  ; a fn form
+```
+
+Strings keep working, and stay the right answer for the two things EDN cannot
+represent: `"#(= % \"pedro\")"` and `"#\"^p\""`. Everything else reads better as
+data, which is why `:dispatch` has always taken `[:login "pedro"]` rather than
+text.
+
+The predicate is rendered as source either way, so any expression works:
+`some?`, `string?`, `"#(> (count %) 3)"`.
 
 `:expect-sub` and `:expect-db` are **assertions** — a `false` or `nil` result
 fails the step. `:eval-cljs` and `:dispatch` are **actions** — they pass unless
