@@ -220,6 +220,14 @@ verdict between file writes.
  :timeout-ms     15000
  :poll-ms        250                      ; condition-wait poll interval
  :viewport       {:width 1280 :height 800} ; optional; a scenario may override
+ :matrix         {:desktop {:browser :chromium
+                            :viewport {:width 1440 :height 900}
+                            :tags #{:desktop}}
+                  :ios     {:browser :webkit
+                            :viewport {:width 390 :height 844}
+                            :is-mobile true
+                            :has-touch true
+                            :tags #{:ios :mobile}}}
  :iframe         "#player"                ; optional; scopes steps to a child document
  :artifacts-dir  "<root>/.hive-cljs/artifacts"
  :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
@@ -240,6 +248,21 @@ Relative `:goto` URLs resolve against the scenario's base URL — the
 through.
 Screenshots land in `:artifacts-dir` and are listed in the run report's
 `:run/artifacts`.
+
+#### `:matrix` — one scenario, several observation surfaces
+
+`:matrix` is an optional map from a platform keyword to Playwright context
+options. When present, hive-cljs expands every authored scenario once per
+entry. `:login` becomes `:login/desktop` and `:login/ios`; the generated ids
+are deterministic, retain the authored tags, and gain `:matrix` plus
+`:platform/<name>` tags. Watch, mutation, and generated Kaocha tests all see
+the same variants.
+
+Supported platform options are `:browser`, `:viewport`, `:user-agent`,
+`:is-mobile`, `:has-touch`, `:device-scale-factor`, `:tags`, and `:doc`.
+WebKit is a strong local approximation for iOS Safari behavior, but it is not
+the iOS Simulator; final Safari confidence still requires macOS/Xcode or a
+real-device service.
 
 Step vocabulary: [steps.md](steps.md).
 

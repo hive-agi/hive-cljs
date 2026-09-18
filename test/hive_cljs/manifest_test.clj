@@ -57,3 +57,30 @@
   (is (= [:login] (mapv :id (manifest/scenarios-by-tag fix/manifest #{:smoke}))))
   (testing "no tags selects everything"
     (is (= 2 (count (manifest/scenarios-by-tag fix/manifest #{}))))))
+
+(deftest a-platform-matrix-expands-one-scenario-into-deterministic-variants
+  (let [m (:ok (manifest/parse
+                (assoc-in fix/raw [:hive.cljs/e2e :matrix]
+                          {:android {:browser :chromium
+                                     :viewport {:width 412 :height 915}
+                                     :is-mobile true
+                                     :has-touch true
+                                     :tags #{:android :mobile}}
+                           :ios {:browser :webkit
+                                 :viewport {:width 390 :height 844}
+                                 :user-agent "ios-test"
+                                 :is-mobile true
+                                 :has-touch true
+                                 :tags #{:ios :mobile}}})
+                "/tmp/x"))
+        scenarios (manifest/scenarios m)]
+    (is (m/validate s/Manifest m) (pr-str (m/explain s/Manifest m)))
+    (is (= [:login/android :login/ios :dashboard/android :dashboard/ios]
+           (mapv :id scenarios)))
+    (is (= #{:smoke :matrix :platform/android :android :mobile}
+           (:tags (first scenarios))))
+    (is (= :webkit (:browser (second scenarios))))
+    (is (= {:width 390 :height 844} (:viewport (second scenarios))))
+    (is (= "ios-test" (:user-agent (second scenarios))))
+    (is (= #{:login/android :dashboard/android}
+           (set (map :id (manifest/scenarios-by-tag m #{:android})))))))

@@ -70,6 +70,26 @@
       (is (true? (:ignore-https-errors (session m adhoc))))
       (is (false? (:ignore-https-errors (session fix/manifest adhoc)))))))
 
+(deftest a-platform-variant-reaches-the-browser-context
+  (let [m (:ok (manifest/parse
+                (assoc-in fix/raw [:hive.cljs/e2e :matrix]
+                          {:ios {:browser :webkit
+                                 :viewport {:width 390 :height 844}
+                                 :user-agent "ios-test"
+                                 :is-mobile true
+                                 :has-touch true
+                                 :device-scale-factor 2.0}})
+                "/tmp/x"))
+        p (:ok (plan/plan-for-id m :login/ios))
+        session (:plan/session p)]
+    (is (= :webkit (:browser session)))
+    (is (= {:width 390 :height 844} (:viewport session)))
+    (is (= "ios-test" (:user-agent session)))
+    (is (true? (:is-mobile session)))
+    (is (true? (:has-touch session)))
+    (is (= 2.0 (:device-scale-factor session)))
+    (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p)))))
+
 (deftest an-iframe-scopes-a-run-and-a-scenario-overrides-the-manifests
   ;; A composition host renders the app under test in a child document, so the
   ;; selector every step carries has to address THAT document. The knob travels

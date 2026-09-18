@@ -103,11 +103,63 @@
   (cond-> {:id    (:id raw)
            :steps (vec (:steps raw))}
     (:build raw)    (assoc :build (:build raw))
+    (:platform raw) (assoc :platform (:platform raw))
+    (:browser raw)  (assoc :browser (:browser raw))
     (:frame raw)    (assoc :frame (:frame raw))
     (:viewport raw) (assoc :viewport (:viewport raw))
+    (:user-agent raw)          (assoc :user-agent (:user-agent raw))
+    (contains? raw :is-mobile) (assoc :is-mobile (:is-mobile raw))
+    (contains? raw :has-touch) (assoc :has-touch (:has-touch raw))
+    (:device-scale-factor raw) (assoc :device-scale-factor (:device-scale-factor raw))
     (:iframe raw)   (assoc :iframe (:iframe raw))
     (:doc raw)      (assoc :doc (:doc raw))
     (seq (:tags raw)) (assoc :tags (set (:tags raw)))))
+
+(def ^:private platform-keys
+  [:browser :viewport :user-agent :is-mobile :has-touch :device-scale-factor])
+
+(defn normalize-platform
+  "Normalize one matrix entry without allowing arbitrary context keys through."
+  [raw]
+  (let [raw (if (map? raw) raw {})]
+    (cond-> (select-keys raw (conj platform-keys :tags :doc))
+      (contains? raw :tags) (update :tags set))))
+
+(defn normalize-matrix
+  "Normalize and deterministically order the authored platform matrix."
+  [raw]
+  (into (sorted-map)
+        (map (fn [[id spec]] [id (normalize-platform spec)]))
+        (if (map? raw) raw {})))
+
+(defn- platform-tag
+  [id]
+  (keyword "platform" (name id)))
+
+(defn- matrix-scenario
+  "Cross one authored scenario with one platform observation surface."
+  [scenario [platform spec]]
+  (let [id (keyword (name (:id scenario)) (name platform))]
+    (cond-> (-> scenario
+                (merge (select-keys spec platform-keys))
+                (assoc :id id :platform platform)
+                (update :tags into (conj (set (:tags scenario))
+                                         :matrix
+                                         (platform-tag platform)))
+                (update :tags into (set (:tags spec))))
+      (:doc spec) (update :doc #(str (or % "") " [" (name platform) "]")))))
+
+(defn expand-matrix
+  "Return authored scenarios unchanged, or their Cartesian product with matrix.
+
+   Expansion happens at the manifest boundary. Plans, generated tests, watch
+   decisions, and mutation therefore share the same variant IDs."
+  [scenarios matrix]
+  (if (seq matrix)
+    (vec (mapcat (fn [scenario]
+                   (map #(matrix-scenario scenario %) matrix))
+                 scenarios))
+    (vec scenarios)))
 
 (defn infer-base-url
   "Base URL for the e2e run: explicit, else derived from a build's :http-port."
@@ -127,16 +179,19 @@
 
 (defn normalize-e2e
   [raw builds root]
-  (let [raw (or raw {})]
+  (let [raw     (or raw {})
+        matrix  (normalize-matrix (:matrix raw))
+        entries (mapv normalize-scenario (:scenarios raw))]
     (merge default-e2e
            {:base-url      (infer-base-url raw builds)
             :artifacts-dir (or (:artifacts-dir raw)
                                (str (str/replace root #"/$" "") "/" default-artifacts-dir))
-            :scenarios     (mapv normalize-scenario (:scenarios raw))
+            :scenarios     (expand-matrix entries matrix)
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
                              :ignore-https-errors :viewport :iframe
-                             :app-db-schema :app-db-check]))))
+                             :app-db-schema :app-db-check])
+           (when (seq matrix) {:matrix matrix}))))
 
 (defn normalize-action
   "Coerce a watch action to the `[kind opts]` tuple shape."

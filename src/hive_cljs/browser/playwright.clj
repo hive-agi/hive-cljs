@@ -238,13 +238,17 @@
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
   (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors
-                            viewport iframe]}]
+                            viewport user-agent is-mobile has-touch device-scale-factor iframe]}]
     (try
       (let [^Playwright pw (Playwright/create)
             br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless))
             ctx-opts (cond-> (Browser$NewContextOptions.)
                        ignore-https-errors (.setIgnoreHTTPSErrors true)
-                       viewport (.setViewportSize (int (:width viewport)) (int (:height viewport))))
+                       viewport (.setViewportSize (int (:width viewport)) (int (:height viewport)))
+                       user-agent (.setUserAgent (str user-agent))
+                       (some? is-mobile) (.setIsMobile (boolean is-mobile))
+                       (some? has-touch) (.setHasTouch (boolean has-touch))
+                       device-scale-factor (.setDeviceScaleFactor (double device-scale-factor)))
             ^BrowserContext ctx (.newContext br ctx-opts)
             ^Page page (.newPage ctx)]
         (when timeout-ms

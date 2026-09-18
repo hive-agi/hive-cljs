@@ -81,9 +81,9 @@
    URLs resolve against the named build's `:http-port` when it declares one,
    else against the manifest-wide :base-url. A frame id (scenario :frame, else
    e2e :frame) is stamped onto runtime ops so re-frame2 frame-scoped apps get
-   frame-pinned subscribe/dispatch/db reads. A scenario :viewport and a
-   scenario :iframe each override the manifest-wide one for that run's
-   session."
+   frame-pinned subscribe/dispatch/db reads. A scenario's platform/context
+   options, viewport, and iframe each override the manifest-wide values for
+   that run's session."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
    (let [base-url (scenario-base-url manifest scenario)
@@ -91,8 +91,14 @@
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
          session  (cond-> (assoc (session-opts manifest) :base-url base-url)
+                    (:browser scenario) (assoc :browser (:browser scenario))
                     (:viewport scenario) (assoc :viewport (:viewport scenario))
-                    (:iframe scenario)   (assoc :iframe (:iframe scenario)))]
+                    (:user-agent scenario) (assoc :user-agent (:user-agent scenario))
+                    (contains? scenario :is-mobile) (assoc :is-mobile (:is-mobile scenario))
+                    (contains? scenario :has-touch) (assoc :has-touch (:has-touch scenario))
+                    (:device-scale-factor scenario)
+                    (assoc :device-scale-factor (:device-scale-factor scenario))
+                    (:iframe scenario) (assoc :iframe (:iframe scenario)))]
      (if (r/err? compiled)
        compiled
        (r/ok (cond-> {:plan/scenario (:id scenario)

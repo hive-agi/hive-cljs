@@ -122,12 +122,34 @@
    [:width [:int {:min 1}]]
    [:height [:int {:min 1}]]])
 
+(def DeviceScaleFactor
+  [:and [:or :int :double]
+   [:fn {:error/message "device scale factor must be positive"} pos?]])
+
+(def PlatformSpec
+  "One browser/context variant in an e2e matrix."
+  [:map {:closed true}
+   [:browser {:optional true} BrowserEngine]
+   [:viewport {:optional true} Viewport]
+   [:user-agent {:optional true} NonBlankString]
+   [:is-mobile {:optional true} :boolean]
+   [:has-touch {:optional true} :boolean]
+   [:device-scale-factor {:optional true} DeviceScaleFactor]
+   [:tags {:optional true} [:set :keyword]]
+   [:doc {:optional true} :string]])
+
 (def Scenario
   [:map {:closed true}
    [:id ScenarioId]
    [:build {:optional true} BuildId]
+   [:platform {:optional true} :keyword]
+   [:browser {:optional true} BrowserEngine]
    [:frame {:optional true} :keyword]
    [:viewport {:optional true} Viewport]
+   [:user-agent {:optional true} NonBlankString]
+   [:is-mobile {:optional true} :boolean]
+   [:has-touch {:optional true} :boolean]
+   [:device-scale-factor {:optional true} DeviceScaleFactor]
    [:iframe {:optional true} NonBlankString]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
@@ -183,6 +205,7 @@
    ;; public origin.
    [:ignore-https-errors {:optional true} :boolean]
    [:viewport {:optional true} Viewport]
+   [:matrix {:optional true} [:map-of :keyword PlatformSpec]]
    ;; Selector for an iframe that runtime JavaScript is evaluated INSIDE. A
    ;; composition host (a slide player, a preview pane, an embedded editor)
    ;; renders the application under test in a child document, so `document`
