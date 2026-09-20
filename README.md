@@ -228,7 +228,7 @@ Same execution path as the tool and the watcher. See
 One line in the host's `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.2.6"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.2.21"}
 ```
 
 …or, when hacking on hive-cljs itself, `#:local{:root "../hive-cljs"}`.
