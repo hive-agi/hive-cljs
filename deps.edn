@@ -21,7 +21,7 @@
   ;; hive-events — event bus for build → e2e coupling
   io.github.hive-agi/hive-events {:mvn/version "0.5.18"}
 
-  metosin/malli                 {:mvn/version "0.20.1"}
+  metosin/malli                 {:mvn/version "0.20.2"}
 
   ;; shadow-cljs remote-relay transport (websocket + transit)
   com.cognitect/transit-clj     {:mvn/version "1.1.363"}
