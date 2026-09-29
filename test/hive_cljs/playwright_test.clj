@@ -44,3 +44,10 @@
         (is (r/err? res))
         (is (= :browser/iframe-unresolved (:error res)))
         (is (= "#missing" (:selector res)))))))
+
+(deftest launch-args-reach-the-browser-process-options
+  (is (= ["--use-fake-device-for-media-stream"]
+         (vec (.-args (pw/launch-options true ["--use-fake-device-for-media-stream"])))))
+  (is (true? (.-headless (pw/launch-options true nil))))
+  (is (nil? (.-args (pw/launch-options false [])))
+      "no switches leaves Playwright's own defaults untouched"))

@@ -222,9 +222,14 @@
 ;; Session lifecycle
 ;; =============================================================================
 
+(defn launch-options
+  ^BrowserType$LaunchOptions [headless launch-args]
+  (cond-> (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))
+    (seq launch-args) (.setArgs (vec launch-args))))
+
 (defn- launch-browser
-  ^Browser [^Playwright pw engine headless]
-  (let [opts (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))]
+  ^Browser [^Playwright pw engine headless launch-args]
+  (let [opts (launch-options headless launch-args)]
     (case engine
       :firefox (.launch (.firefox pw) opts)
       :webkit  (.launch (.webkit pw) opts)
@@ -238,10 +243,12 @@
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
   (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors
-                            viewport user-agent is-mobile has-touch device-scale-factor iframe]}]
+                            viewport user-agent is-mobile has-touch device-scale-factor iframe
+                            launch-args]}]
     (try
       (let [^Playwright pw (Playwright/create)
-            br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless))
+            br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless)
+                                launch-args)
             ctx-opts (cond-> (Browser$NewContextOptions.)
                        ignore-https-errors (.setIgnoreHTTPSErrors true)
                        viewport (.setViewportSize (int (:width viewport)) (int (:height viewport)))

@@ -44,6 +44,14 @@
       (:viewport e2e) (assoc :viewport (:viewport e2e))
       (:iframe e2e)   (assoc :iframe (:iframe e2e)))))
 
+(defn launch-args
+  "The browser switches a scenario runs with: its own when it declares any,
+   even an empty vector, else the manifest's."
+  [manifest-args scenario]
+  (if (contains? scenario :launch-args)
+    (:launch-args scenario)
+    manifest-args))
+
 (defn runtime-opts
   "Runtime-channel options for a run — what the boundary needs that the browser
    session does not: how long to poll a condition-wait, and which app-db
@@ -98,7 +106,9 @@
                     (contains? scenario :has-touch) (assoc :has-touch (:has-touch scenario))
                     (:device-scale-factor scenario)
                     (assoc :device-scale-factor (:device-scale-factor scenario))
-                    (:iframe scenario) (assoc :iframe (:iframe scenario)))]
+                    (:iframe scenario) (assoc :iframe (:iframe scenario)))
+         session  (let [args (launch-args (get-in manifest [:manifest/e2e :launch-args]) scenario)]
+                    (if (seq args) (assoc session :launch-args args) session))]
      (if (r/err? compiled)
        compiled
        (r/ok (cond-> {:plan/scenario (:id scenario)

@@ -122,6 +122,13 @@
    [:width [:int {:min 1}]]
    [:height [:int {:min 1}]]])
 
+(def LaunchArgs
+  "Command-line switches the browser process is launched with, e.g. Chromium's
+   --use-fake-device-for-media-stream. Process-wide, so they cannot be set on a
+   context the way a viewport is. On one scenario they REPLACE the manifest's;
+   an empty vector launches that scenario with none."
+  [:vector NonBlankString])
+
 (def DeviceScaleFactor
   [:and [:or :int :double]
    [:fn {:error/message "device scale factor must be positive"} pos?]])
@@ -151,6 +158,7 @@
    [:has-touch {:optional true} :boolean]
    [:device-scale-factor {:optional true} DeviceScaleFactor]
    [:iframe {:optional true} NonBlankString]
+   [:launch-args {:optional true} LaunchArgs]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -205,6 +213,7 @@
    ;; public origin.
    [:ignore-https-errors {:optional true} :boolean]
    [:viewport {:optional true} Viewport]
+   [:launch-args {:optional true} LaunchArgs]
    [:matrix {:optional true} [:map-of :keyword PlatformSpec]]
    ;; Selector for an iframe that runtime JavaScript is evaluated INSIDE. A
    ;; composition host (a slide player, a preview pane, an embedded editor)
