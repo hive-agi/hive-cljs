@@ -6,7 +6,8 @@
 
    Two families:
    - `Raw*`        — permissive, boundary-facing (project EDN, MCP string coercion)
-   - everything else — `:closed true` internal plan/report shapes")
+   - everything else — `:closed true` internal plan/report shapes"
+  (:require [hive-cljs.selector :as selector]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -99,6 +100,16 @@
    [:vector {:min 1} :any]
    [:fn {:error/message "step must start with a keyword"}
     #(keyword? (first %))]])
+
+(def Selector
+  "What a selector-taking step accepts: a CSS/Playwright string (passed
+   through), or selector DATA — a `:tag#id.class` keyword, an attribute map,
+   or a hiccup vector — that `hive-cljs.selector` compiles. The `:fn` arm is
+   the compiler itself, so the schema and the step compiler cannot disagree."
+  [:and
+   [:or NonBlankString :keyword [:map-of :keyword :any] [:vector {:min 1} :any]]
+   [:fn {:error/message "selector does not compile (see hive-cljs.selector)"}
+    selector/valid?]])
 
 (def OpChannel
   "Which port executes a compiled op."
