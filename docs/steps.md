@@ -122,6 +122,13 @@ represent: `"#(= % \"pedro\")"` and `"#\"^p\""`. Everything else reads better as
 data, which is why `:dispatch` has always taken `[:login "pedro"]` rather than
 text.
 
+A form is printed with `pr-str` under **pinned** printer vars
+(`*print-namespace-maps*` false, `*print-length*` and `*print-level*` nil,
+`*print-meta*` false, `*print-readably*` true), so the source sent to the app is
+the same whatever bindings the calling thread carries: a REPL with
+`*print-length*` set cannot truncate `[1 2 3 4]` into `[1 2 ...]`, and
+`{:user/id 1}` never arrives as `#:user{:id 1}`. A string is sent verbatim.
+
 The predicate is rendered as source either way, so any expression works:
 `some?`, `string?`, `"#(> (count %) 3)"`.
 

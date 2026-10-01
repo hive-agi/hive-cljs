@@ -6,7 +6,8 @@
    re-frame specific, not shadow specific, and conflating the two axes was what
    kept `boundary` — which claims to name no vendor — requiring one."
   (:require [clojure.string :as str]
-            [hive-cljs.dialect.js :as jsd]))
+            [hive-cljs.dialect.js :as jsd]
+            [hive-cljs.dialect.source :as src]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -17,9 +18,10 @@
 ;; =============================================================================
 
 (defn form->string
-  "Render an authored form argument as source text."
+  "Render an authored form argument as source text: a string verbatim, a form
+   printed under pinned printer vars (see `hive-cljs.dialect.source`)."
   [x]
-  (if (string? x) x (pr-str x)))
+  (src/form->string x))
 
 (defn sub-form
   "Source text that dereferences a re-frame subscription. With a `frame` id the
@@ -86,7 +88,7 @@
   "Source text listing the handler ids re-frame registered under `kind`
    (`:sub` or `:event`) — the zero-config half of a mutation catalog."
   [kind]
-  (str "(vec (keys (get @re-frame.registrar/kind->id->handler " (pr-str kind) ")))"))
+  (str "(vec (keys (get @re-frame.registrar/kind->id->handler " (src/pr-source kind) ")))"))
 
 (defn registry-map-form
   "Source text reading several registries in ONE round trip: `{kind [ids…] …}`.
@@ -94,7 +96,7 @@
    One trip, because each one costs a page: the registries can only be read
    from a running app, and the app is only running while a browser holds it."
   [kinds]
-  (str "{" (str/join " " (map (fn [k] (str (pr-str k) " " (registry-ids-form k))) kinds)) "}"))
+  (str "{" (str/join " " (map (fn [k] (str (src/pr-source k) " " (registry-ids-form k))) kinds)) "}"))
 
 (defn neutralize-form
   "Source text re-registering a re-frame handler as a no-op.
@@ -105,9 +107,9 @@
   [kind id]
   (case kind
     :sub   (str "(do (re-frame.core/clear-subscription-cache!)"
-                " (re-frame.core/reg-sub " (pr-str id) " (fn [_ _] nil))"
+                " (re-frame.core/reg-sub " (src/pr-source id) " (fn [_ _] nil))"
                 " (re-frame.core/clear-subscription-cache!) :neutralized)")
-    :event (str "(do (re-frame.core/reg-event-db " (pr-str id)
+    :event (str "(do (re-frame.core/reg-event-db " (src/pr-source id)
                 " (fn [db _] db)) :neutralized)")))
 
 ;; =============================================================================
@@ -122,7 +124,7 @@
    truthiness rules, js/eval runs it, and js->clj brings the answer back as
    data the JVM side can read."
   [source]
-  (str "(js->clj (js/eval " (pr-str source) "))"))
+  (str "(js->clj (js/eval " (src/pr-source source) "))"))
 
 (defn assertion-source
   "Source text a runtime op asserts on, or nil for a kind this dialect does not
