@@ -161,7 +161,8 @@
    [:is-mobile {:optional true} :boolean]
    [:has-touch {:optional true} :boolean]
    [:device-scale-factor {:optional true} DeviceScaleFactor]
-   [:iframe {:optional true} NonBlankString]
+   ;; A selector — string or selector data — like every DOM step's.
+   [:iframe {:optional true} Selector]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -221,8 +222,10 @@
    ;; composition host (a slide player, a preview pane, an embedded editor)
    ;; renders the application under test in a child document, so `document`
    ;; in the top page is the host's, not the app's. Named :iframe rather than
-   ;; :frame because :frame is already the re-frame2 frame id.
-   [:iframe {:optional true} NonBlankString]
+   ;; :frame because :frame is already the re-frame2 frame id. A Selector:
+   ;; a string, or selector data compiled by `hive-cljs.selector` when the
+   ;; plan is built.
+   [:iframe {:optional true} Selector]
    [:timeout-ms Millis]
    [:poll-ms Millis]
    [:frame {:optional true} :keyword]

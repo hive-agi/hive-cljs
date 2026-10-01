@@ -10,6 +10,11 @@
      [:expect-js   (every? dom/visible? (dom/all \"#main [data-composition-id]\"))]
      [:expect-state [\"model\" \"loading\"] (= v false)]
 
+   Every `dom/*` selector argument may be a string (verbatim) or selector DATA
+   (`hive-cljs.selector`), compiled with the CSS-only dialect at render time:
+
+     (dom/count [:li.row {:data-state \"open\"}])
+
    The language is CLOSED. Every head is either one this namespace knows, an
    interop form (`.method`, `.-prop`), a local bound by `let`/`fn`, or an
    explicit `js/` name. Anything else is a compile error raised while the plan
@@ -22,7 +27,8 @@
    in Clojure. Evaluation runs in whatever document the step targets, so with
    `:iframe` set `document` already IS the composition's."
   (:require [clojure.string :as str]
-            [hive-cljs.dialect.source :as src]))
+            [hive-cljs.dialect.source :as src]
+            [hive-cljs.selector :as selector]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -130,6 +136,25 @@
 (def ^:private count-body
   "(x == null ? 0 : typeof x.length === 'number' ? x.length : typeof x.size === 'number' ? x.size : Object.keys(x).length)")
 
+(defn- selector-datum?
+  "True for selector DATA (`hive-cljs.selector`): a keyword, attribute map or
+   hiccup vector. A string is already a selector and renders verbatim."
+  [form]
+  (or (keyword? form) (map? form) (vector? form)))
+
+(defn- emit-sel
+  "A selector argument. Selector data is compiled with the CSS-only dialect,
+   because the PAGE evaluates it with querySelector — Playwright's
+   pseudo-classes would be a SyntaxError there. Anything else emits as usual."
+  [ctx env form]
+  (if (selector-datum? form)
+    (let [res (selector/compile-selector form {:dialect :css})]
+      (if (:ok res)
+        (lit-str (:ok res))
+        (bad (str "selector " (pr-str form) " does not compile: " (:problem res))
+             {:selector form :problem (:problem res)})))
+    (emit ctx env form)))
+
 (defn- el-of
   "An element argument: a selector string queries the document, anything else
    is taken to be an element already."
@@ -145,8 +170,8 @@
   "`(dom/all sel)` or `(dom/all root sel)` → [root-js sel-js]."
   [ctx env head xs]
   (case (count xs)
-    1 ["document" (emit ctx env (first xs))]
-    2 [(el-of (emit ctx env (first xs))) (emit ctx env (second xs))]
+    1 ["document" (emit-sel ctx env (first xs))]
+    2 [(el-of (emit-sel ctx env (first xs))) (emit-sel ctx env (second xs))]
     (bad (str head " takes (sel) or (root sel)") {:args xs})))
 
 (defn- arity! [head xs n]
@@ -212,7 +237,9 @@
   "Emit a call to a head this language defines, or nil when `k` is not one."
   [ctx env k xs]
   (let [e  #(emit ctx env %)
-        a1 #(do (arity! k xs 1) (e (first xs)))]
+        es #(emit-sel ctx env %)
+        a1 #(do (arity! k xs 1) (e (first xs)))
+        a1-sel #(do (arity! k xs 1) (es (first xs)))]
     (case k
       ("=" "==") (chain ctx env "===" xs)
       "not="     (str "!" (chain ctx env "===" xs))
@@ -282,17 +309,17 @@
                     (str "Array.from((" r ")?.querySelectorAll(" s ") ?? [])"))
       "dom/count" (let [[r s] (root-and-sel ctx env k xs)]
                     (str "((" r ")?.querySelectorAll(" s ").length ?? 0)"))
-      "dom/text"  (str "(" (el-of (a1)) ")?.textContent")
+      "dom/text"  (str "(" (el-of (a1-sel)) ")?.textContent")
       "dom/attr"  (do (arity! k xs 2)
-                      (str "(" (el-of (e (first xs))) ")?.getAttribute(" (e (second xs)) ")"))
+                      (str "(" (el-of (es (first xs))) ")?.getAttribute(" (e (second xs)) ")"))
       "dom/style" (do (arity! k xs 2)
                       (str "((el) => el ? getComputedStyle(el)[" (e (second xs)) "] : null)("
-                           (el-of (e (first xs))) ")"))
-      "dom/visible?" (once visible-body (el-of (a1)))
+                           (el-of (es (first xs))) ")"))
+      "dom/visible?" (once visible-body (el-of (a1-sel)))
       "dom/matches?" (do (arity! k xs 2)
-                         (str "!!(" (el-of (e (first xs))) ")?.matches(" (e (second xs)) ")"))
+                         (str "!!(" (el-of (es (first xs))) ")?.matches(" (es (second xs)) ")"))
       "dom/has-class?" (do (arity! k xs 2)
-                           (str "!!(" (el-of (e (first xs))) ")?.classList.contains(" (e (second xs)) ")"))
+                           (str "!!(" (el-of (es (first xs))) ")?.classList.contains(" (e (second xs)) ")"))
       nil)))
 
 ;; A known one-argument function named bare, e.g. (every? dom/visible? xs),

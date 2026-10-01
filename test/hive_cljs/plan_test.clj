@@ -184,3 +184,43 @@
     (is (r/ok? res))
     (is (= [:login] (mapv :plan/scenario (:ok res)))))
   (is (= :scenario/none-matched (:error (plan/plans-for-tags fix/manifest #{:nope})))))
+
+;; =============================================================================
+;; :iframe as selector DATA
+;; =============================================================================
+
+(deftest an-iframe-authored-as-data-reaches-the-session-compiled
+  ;; The plan is the one place :iframe is compiled, so the adapter only ever
+  ;; holds a string — the same contract every DOM step's selector has.
+  (let [session (fn [id] (:plan/session (:ok (plan/plan-for-id fix/manifest-data id))))]
+    (testing "the manifest-wide datum compiles for a scenario that declares none"
+      (is (= "hyperframes-player iframe#stage" (:iframe (session :login)))))
+    (testing "a scenario's own datum wins, and compiles too"
+      (is (= "[data-testid=\"preview\"]" (:iframe (session :dashboard)))))
+    (testing "the parsed manifest keeps what was AUTHORED"
+      (is (= [:hyperframes-player [:iframe#stage]]
+             (get-in fix/manifest-data [:manifest/e2e :iframe])))
+      (is (= {:data-testid "preview"}
+             (:iframe (manifest/scenario fix/manifest-data :dashboard)))))
+    (testing "and the plan still conforms"
+      (let [p (:ok (plan/plan-for-id fix/manifest-data :dashboard))]
+        (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p)))))))
+
+(deftest selector-data-and-strings-plan-the-same-ops
+  (doseq [id [:login :dashboard]]
+    (is (= (mapv :op/args (:plan/ops (:ok (plan/plan-for-id fix/manifest id))))
+           (mapv :op/args (:plan/ops (:ok (plan/plan-for-id fix/manifest-data id)))))
+        (str id " compiles to the same selector strings either way"))))
+
+(deftest a-malformed-iframe-fails-the-plan-not-the-run
+  (testing "a hand-built scenario is refused when its plan is built"
+    (let [res (plan/build-plan fix/manifest {:id :x :iframe [:li :a :b] :steps [[:goto "/"]]})]
+      (is (r/err? res))
+      (is (= :selector/malformed (:error res)))
+      (is (= :iframe (:key res)))
+      (is (= [:li :a :b] (:selector res)))))
+  (testing "a manifest carrying one does not even parse"
+    (is (r/err? (manifest/parse (assoc-in fix/raw [:hive.cljs/e2e :iframe] [:li :a :b])
+                                "/tmp/x")))
+    (is (r/err? (manifest/parse (assoc-in fix/raw [:hive.cljs/e2e :iframe] "")
+                                "/tmp/x")))))

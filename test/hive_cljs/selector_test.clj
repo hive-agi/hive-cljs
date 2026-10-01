@@ -132,6 +132,12 @@
   (let [res (step/compile-steps [[:goto "/"] [:click 42]])]
     (is (= 1 (:index res)))))
 
+(deftest iframe-schema-takes-a-selector
+  (doseq [iframe ["#player" :iframe#stage [:hyperframes-player [:iframe]] {:data-testid "p"}]]
+    (is (m/validate s/Scenario {:id :x :iframe iframe :steps [[:goto "/"]]}) (pr-str iframe)))
+  (doseq [iframe ["" [:li :a :b] 42]]
+    (is (not (m/validate s/Scenario {:id :x :iframe iframe :steps [[:goto "/"]]})) (pr-str iframe))))
+
 (deftest selector-schema-agrees-with-the-compiler
   (is (m/validate s/Selector "#a"))
   (is (m/validate s/Selector [:li {:has-text "X"}]))

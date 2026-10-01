@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [hive-cljs.manifest :as manifest]
             [hive-cljs.schema :as s]
+            [hive-cljs.selector :as selector]
             [hive-cljs.step :as step]
             [hive-dsl.result :as r]
             [malli.core :as m]))
@@ -30,6 +31,20 @@
             (update-in op [:op/args 0] #(absolutize base-url %))
             op))
         ops))
+
+(defn compile-iframe
+  "Result of `session` with its `:iframe` compiled to the selector string the
+   browser reads. The manifest may author it as a string or as selector DATA
+   (`hive-cljs.selector`); this is the ONE place it is compiled, so the
+   adapter only ever sees a string. A malformed one is the plan's
+   `:selector/malformed` error, tagged `:at :iframe`."
+  [session]
+  (if-let [sel (:iframe session)]
+    (let [res (selector/compile-selector sel)]
+      (if (r/ok? res)
+        (r/ok (assoc session :iframe (:ok res)))
+        (assoc res :key :iframe)))
+    (r/ok session)))
 
 (defn session-opts
   "Browser session options for a run."
@@ -90,7 +105,8 @@
          compiled (step/compile-steps rules (:steps scenario))
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
-         session  (cond-> (assoc (session-opts manifest) :base-url base-url)
+         session  (compile-iframe
+                   (cond-> (assoc (session-opts manifest) :base-url base-url)
                     (:browser scenario) (assoc :browser (:browser scenario))
                     (:viewport scenario) (assoc :viewport (:viewport scenario))
                     (:user-agent scenario) (assoc :user-agent (:user-agent scenario))
@@ -98,12 +114,14 @@
                     (contains? scenario :has-touch) (assoc :has-touch (:has-touch scenario))
                     (:device-scale-factor scenario)
                     (assoc :device-scale-factor (:device-scale-factor scenario))
-                    (:iframe scenario) (assoc :iframe (:iframe scenario)))]
-     (if (r/err? compiled)
-       compiled
+                    (:iframe scenario) (assoc :iframe (:iframe scenario))))]
+     (cond
+       (r/err? compiled) compiled
+       (r/err? session)  session
+       :else
        (r/ok (cond-> {:plan/scenario (:id scenario)
                       :plan/base-url base-url
-                      :plan/session  session
+                      :plan/session  (:ok session)
                       :plan/runtime  (runtime-opts manifest frame)
                       :plan/ops      (cond->> (resolve-urls base-url (:ok compiled))
                                        frame (mapv #(if (= :runtime (:op/channel %))
@@ -149,6 +167,7 @@
 
 (m/=> absolutize [:=> [:cat s/NonBlankString s/NonBlankString] s/NonBlankString])
 (m/=> session-opts [:=> [:cat s/Manifest] [:map-of :keyword :any]])
+(m/=> compile-iframe [:=> [:cat [:map-of :keyword :any]] :any])
 (m/=> scenario-base-url [:=> [:cat s/Manifest s/Scenario] s/NonBlankString])
 (m/=> channels-used [:=> [:cat s/RunPlan] [:set s/OpChannel]])
 (m/=> needs-runtime? [:=> [:cat s/RunPlan] :boolean])

@@ -10,7 +10,7 @@
             [clojure.test :refer [deftest is testing]]
             [hive-cljs.browser.playwright :as pw]
             [hive-dsl.result :as r])
-  (:import [com.microsoft.playwright Page]))
+  (:import [com.microsoft.playwright Frame Page ElementHandle]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -44,3 +44,52 @@
         (is (r/err? res))
         (is (= :browser/iframe-unresolved (:error res)))
         (is (= "#missing" (:selector res)))))))
+
+;; =============================================================================
+;; Selector data never reaches Playwright as data
+;; =============================================================================
+
+(defn- recording-page
+  "A Page that records every selector string it is handed. Its querySelector
+   answers an element whose content frame is `frame`."
+  [seen frame]
+  (proxy [Page] []
+    (querySelector [sel]
+      (swap! seen conj sel)
+      (proxy [ElementHandle] []
+        (contentFrame [] frame)))
+    (click [sel & _] (swap! seen conj sel) nil)
+    (textContent [sel & _] (swap! seen conj sel) "Hello there")))
+
+(deftest an-iframe-datum-is-compiled-before-the-page-sees-it
+  (let [seen  (atom [])
+        frame (proxy [Frame] [])
+        page  (recording-page seen frame)]
+    (is (identical? frame (pw/dom-root {:page page :iframe [:hyperframes-player [:iframe#stage]]})))
+    (is (= ["hyperframes-player iframe#stage"] @seen))
+    (testing "a string, which a plan always hands over, passes through"
+      (reset! seen [])
+      (pw/dom-root {:page page :iframe "#player"})
+      (is (= ["#player"] @seen)))
+    (testing "a malformed datum is a selector error naming the problem"
+      (let [res (pw/eval-target {:page page :iframe [:li :a :b]})]
+        (is (= :browser/iframe-unresolved (:error res)))
+        (is (str/includes? (:cause res) "malformed selector"))))))
+
+(deftest every-dom-op-hands-playwright-a-string
+  (let [seen (atom [])
+        page (recording-page seen nil)]
+    (testing "a compiled op (what a plan carries) is unchanged"
+      (is (= :pass (:state (pw/perform-op {:page page} {:op/kind :click :op/args ["#go"]}))))
+      (is (= ["#go"] @seen)))
+    (testing "an op built by hand with selector data is compiled, not passed raw"
+      (reset! seen [])
+      (let [out (pw/perform-op {:page page} {:op/kind :expect-text
+                                            :op/args [[:li {:data-testid "hi"}] "Hello"]})]
+        (is (= :pass (:state out)))
+        (is (= ["li[data-testid=\"hi\"]"] @seen))
+        (is (every? string? @seen))))
+    (testing "the selector-string seam itself"
+      (is (= "#go" (pw/selector-string "#go")))
+      (is (= "#go" (pw/selector-string :#go)))
+      (is (thrown? clojure.lang.ExceptionInfo (pw/selector-string [:li :a :b]))))))

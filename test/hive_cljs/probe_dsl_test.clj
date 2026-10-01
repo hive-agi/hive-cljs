@@ -10,6 +10,7 @@
             [hive-cljs.dialect.js :as js]
             [hive-cljs.dialect.probe :as probe]
             [hive-cljs.dialect.re-frame :as re-frame]
+            [hive-cljs.selector :as sel]
             [hive-cljs.step :as step]
             [hive-dsl.result :as r]))
 
@@ -109,3 +110,41 @@
                      "return ((v != null)) ? v : false;"))
   (is (str/includes? (js/probe-source (op :wait-for-state ["m"] '(fn [x] (> x 2))))
                      "[!!((((x_1) => (x_1 > 2)))(v)), v]")))
+
+;; =============================================================================
+;; dom/* take selector DATA as well as strings
+;; =============================================================================
+
+(deftest dom-helpers-accept-selector-data
+  (testing "a datum renders as the same literal its CSS string would"
+    (is (= (probe/->js '(dom/count ".fragment.visible"))
+           (probe/->js '(dom/count :.fragment.visible))))
+    (is (= (probe/->js '(dom/all "#main [data-composition-id]"))
+           (probe/->js '(dom/all [:in :#main {:data-composition-id true}]))))
+    (is (= "(document)?.querySelector(\"[role=\\\"tab\\\"]\")"
+           (probe/->js '(dom/one {:role "tab"})))))
+  (testing "the root of a two-argument call may be a datum too"
+    (is (= (probe/->js '(dom/count "#list" "li.row"))
+           (probe/->js '(dom/count :#list :li.row)))))
+  (testing "element helpers take a datum where they take a selector string"
+    (doseq [[s d] [['(dom/text "#hi") '(dom/text :#hi)]
+                   ['(dom/visible? "#hi") '(dom/visible? :#hi)]
+                   ['(dom/attr "#hi" "href") '(dom/attr :#hi "href")]
+                   ['(dom/style "#hi" "color") '(dom/style :#hi "color")]
+                   ['(dom/has-class? "#hi" "on") '(dom/has-class? :#hi "on")]
+                   ['(dom/matches? "#hi" ".on") '(dom/matches? :#hi :.on)]]]
+      (is (= (probe/->js s) (probe/->js d)) (pr-str d))))
+  (testing "a datum is compiled by hive-cljs.selector, quoted as a literal"
+    (is (str/includes? (probe/->js '(dom/count [:li {:data-state "open"}]))
+                       (pr-str (sel/css [:li {:data-state "open"}] {:dialect :css}))))))
+
+(deftest a-dom-datum-is-css-only-and-checked-at-plan-time
+  (testing "Playwright pseudo-classes are refused: the PAGE runs querySelector"
+    (is (str/includes? (probe/problem '(dom/count [:li {:has-text "X"}]))
+                       "does not compile")))
+  (testing "a malformed datum fails the plan"
+    (let [res (step/compile-step [:expect-js '(= 1 (dom/count [:li :a :b]))])]
+      (is (= :step/malformed (:error res)))
+      (is (str/includes? (:probe res) "[:li :a :b]"))))
+  (testing "a datum step plans like its string twin"
+    (is (r/ok? (step/compile-step [:wait-for-js '(= 1 (dom/count :#welcome.ready))])))))

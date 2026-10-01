@@ -10,6 +10,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [hive-cljs.ports :as ports]
+            [hive-cljs.selector :as selector]
             [hive-dsl.result :as r])
   (:import [com.microsoft.playwright Playwright Browser BrowserType$LaunchOptions
             BrowserContext Page Page$ScreenshotOptions Locator Frame ElementHandle]
@@ -59,6 +60,16 @@
 
 (defn- ^Page page-of [session] (:page session))
 
+(defn selector-string
+  "The selector string a Playwright call takes. A plan has already compiled
+   every selector — step arguments in `hive-cljs.step`, `:iframe` in
+   `hive-cljs.plan` — so this is the identity on what a run hands it. It still
+   compiles selector DATA (and rejects a malformed one with the selector's own
+   message) so an op or session built by hand, outside a plan, cannot reach
+   Playwright as a non-string and fail as an interop error."
+  ^String [sel]
+  (selector/css sel))
+
 (defn dom-root
   "What selector ops and page expressions address: the page itself, or the
    document inside the session's `:iframe`.
@@ -79,8 +90,9 @@
    which is exactly the confusion the option exists to remove, and it would do
    so while reporting a pass."
   [session]
-  (if-let [sel (:iframe session)]
-    (let [^ElementHandle handle (.querySelector (page-of session) sel)]
+  (if-let [authored (:iframe session)]
+    (let [sel (selector-string authored)
+          ^ElementHandle handle (.querySelector (page-of session) sel)]
       (when-not handle
         (throw (ex-info (str "iframe " (pr-str sel) " matches nothing on this page")
                         {:selector sel})))
@@ -115,39 +127,46 @@
   (pass))
 
 (defmethod perform-op :click
-  [session {[sel] :op/args}]
-  (.click (dom-root session) sel)
-  (pass sel))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (.click (dom-root session) sel)
+    (pass sel)))
 
 (defmethod perform-op :fill
-  [session {[sel value] :op/args}]
-  (.fill (dom-root session) sel (str value))
-  (pass sel))
+  [session {[authored value] :op/args}]
+  (let [sel (selector-string authored)]
+    (.fill (dom-root session) sel (str value))
+    (pass sel)))
 
 (defmethod perform-op :select
-  [session {[sel value] :op/args}]
-  (.selectOption (dom-root session) sel (str value))
-  (pass sel))
+  [session {[authored value] :op/args}]
+  (let [sel (selector-string authored)]
+    (.selectOption (dom-root session) sel (str value))
+    (pass sel)))
 
 (defmethod perform-op :check
-  [session {[sel] :op/args}]
-  (.check (dom-root session) sel)
-  (pass sel))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (.check (dom-root session) sel)
+    (pass sel)))
 
 (defmethod perform-op :press
-  [session {[sel k] :op/args}]
-  (.press (dom-root session) sel (str k))
-  (pass (str sel " " k)))
+  [session {[authored k] :op/args}]
+  (let [sel (selector-string authored)]
+    (.press (dom-root session) sel (str k))
+    (pass (str sel " " k))))
 
 (defmethod perform-op :hover
-  [session {[sel] :op/args}]
-  (.hover (dom-root session) sel)
-  (pass sel))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (.hover (dom-root session) sel)
+    (pass sel)))
 
 (defmethod perform-op :wait-for
-  [session {[sel] :op/args}]
-  (.waitForSelector (dom-root session) sel)
-  (pass sel))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (.waitForSelector (dom-root session) sel)
+    (pass sel)))
 
 (defmethod perform-op :wait-ms
   [session {[ms] :op/args}]
@@ -155,44 +174,50 @@
   (pass (str ms "ms")))
 
 (defmethod perform-op :expect-text
-  [session {[sel expected] :op/args}]
-  (let [actual (.textContent (dom-root session) sel)]
+  [session {[authored expected] :op/args}]
+  (let [sel    (selector-string authored)
+        actual (.textContent (dom-root session) sel)]
     (if (and actual (str/includes? actual (str expected)))
       (pass)
       (fail (str "expected " (pr-str expected) " in " sel
                  ", got " (pr-str actual))))))
 
 (defmethod perform-op :expect-value
-  [session {[sel expected] :op/args}]
-  (let [actual (.inputValue (dom-root session) sel)]
+  [session {[authored expected] :op/args}]
+  (let [sel    (selector-string authored)
+        actual (.inputValue (dom-root session) sel)]
     (if (= (str expected) (str actual))
       (pass)
       (fail (str "expected value " (pr-str expected) " in " sel
                  ", got " (pr-str actual))))))
 
 (defmethod perform-op :expect-visible
-  [session {[sel] :op/args}]
-  (if (.isVisible (dom-root session) sel)
-    (pass)
-    (fail (str sel " is not visible"))))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (if (.isVisible (dom-root session) sel)
+      (pass)
+      (fail (str sel " is not visible")))))
 
 (defmethod perform-op :expect-hidden
-  [session {[sel] :op/args}]
-  (if (.isHidden (dom-root session) sel)
-    (pass)
-    (fail (str sel " is visible"))))
+  [session {[authored] :op/args}]
+  (let [sel (selector-string authored)]
+    (if (.isHidden (dom-root session) sel)
+      (pass)
+      (fail (str sel " is visible")))))
 
 (defmethod perform-op :expect-count
-  [session {[sel expected] :op/args}]
-  (let [^Locator loc (.locator (dom-root session) sel)
+  [session {[authored expected] :op/args}]
+  (let [sel    (selector-string authored)
+        ^Locator loc (.locator (dom-root session) sel)
         actual (.count loc)]
     (if (= (long expected) (long actual))
       (pass)
       (fail (str "expected " expected " of " sel ", got " actual)))))
 
 (defmethod perform-op :expect-attr
-  [session {[sel attr expected] :op/args}]
-  (let [actual (.getAttribute (dom-root session) sel (name attr))]
+  [session {[authored attr expected] :op/args}]
+  (let [sel    (selector-string authored)
+        actual (.getAttribute (dom-root session) sel (name attr))]
     (if (= (str expected) (str actual))
       (pass)
       ;; An ABSENT attribute and one holding the wrong value are different
