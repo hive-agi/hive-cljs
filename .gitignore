@@ -1,7 +1,7 @@
 target/
 .cpcache/
 .clj-kondo/.cache/
-.lsp/.cache/
+.lsp/
 local.deps.edn
 .hive-cljs/
 
@@ -11,3 +11,4 @@ example/package-lock.json
 example/public/js/
 example/.shadow-cljs/
 example/shadow.log
+example/.lsp/
