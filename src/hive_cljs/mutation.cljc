@@ -73,13 +73,18 @@
    :fault/doc  (str "neutralized re-frame " (name kind) " " id)})
 
 (defn fault-op
-  "The op that applies a fault: its form, evaluated on the runtime channel."
+  "The op that applies a fault: its form, evaluated on the runtime channel.
+   Built here rather than compiled, so it states its own semantics: it
+   MUTATES, and its value is reported, not asserted."
   [fault]
   (let [src (:fault/form fault)]
-    {:op/kind    :eval-cljs
-     :op/channel :runtime
-     :op/args    [src]
-     :op/source  [:eval-cljs src]}))
+    {:op/kind       :eval-cljs
+     :op/channel    :runtime
+     :op/args       [src]
+     :op/assert?    false
+     :op/poll?      false
+     :op/read-only? false
+     :op/source     [:eval-cljs src]}))
 
 (def boot-barrier-kinds
   "Ops a scenario opens with to let the page come up. A fault is spliced AFTER
@@ -118,12 +123,17 @@
    A fault applied on whatever page happens to be current — an IdP login page
    the app redirected to, say — breaks nothing in the app, yet the eval errors
    on a page that does not carry the app and the run goes red. The guard turns
-   that into a fault that was never applied instead of a fault that was killed."
+   that into a fault that was never applied instead of a fault that was killed.
+
+   It only observes, so it states `:op/read-only?` itself."
   [origin]
-  {:op/kind    :hive-cljs/at-origin
-   :op/channel :browser
-   :op/args    [origin]
-   :op/source  [:hive-cljs/at-origin origin]})
+  {:op/kind       :hive-cljs/at-origin
+   :op/channel    :browser
+   :op/args       [origin]
+   :op/assert?    false
+   :op/poll?      false
+   :op/read-only? true
+   :op/source     [:hive-cljs/at-origin origin]})
 
 (defn- app-arrival?
   "True when `op` asserts the page arrived on the app: an `:expect-url` naming

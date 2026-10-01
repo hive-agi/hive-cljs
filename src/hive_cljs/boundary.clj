@@ -272,13 +272,15 @@
 ;; =============================================================================
 
 (def wait-kinds
-  "Runtime steps that poll a condition instead of asserting it once.
-
-   Defined by the step vocabulary, not here: a new stack's kinds must not need
-   an edit to the boundary."
+  "FALLBACK: runtime kinds that poll a condition instead of asserting it once,
+   for an op carrying no `:op/poll?`. A compiled op says so itself."
   step/poll-kinds)
 
-(defn wait-op? [op] (contains? wait-kinds (:op/kind op)))
+(defn wait-op?
+  "True when `op` polls — read off the op, which its rule stamped, so a new
+   stack's kinds need no edit here."
+  [op]
+  (step/poll-op? op))
 
 (def default-wait-timeout-ms 15000)
 (def default-poll-ms 250)
@@ -332,7 +334,7 @@
 
 (defn- assertion-op?
   [op]
-  (contains? step/assertion-kinds (:op/kind op)))
+  (step/assertion-op? op))
 
 (defn perform-runtime!
   "Execute a :runtime op through ICljsEval. Returns an outcome map.
@@ -381,10 +383,8 @@
 ;; =============================================================================
 
 (def read-only-kinds
-  "Steps that only observe — nothing they do can corrupt app-db."
-  #{:expect-text :expect-value :expect-visible :expect-hidden :expect-count
-    :expect-attr :expect-url :expect-no-errors :hive-cljs/at-origin :expect-sub :expect-db :expect-fits :wait-for
-    :wait-for-sub :wait-for-db :wait-ms :screenshot})
+  "FALLBACK: steps that only observe, for an op carrying no `:op/read-only?`."
+  step/read-only-kinds)
 
 (defn invariant-applies?
   "True when the configured app-db invariant should be asserted after `op`."
@@ -393,7 +393,7 @@
    (and app-db-schema
         (case (or app-db-check :every-step)
           :final     last?
-          :mutations (not (contains? read-only-kinds (:op/kind op)))
+          :mutations (not (step/read-only-op? op))
           true))))
 
 (defn check-invariant!
@@ -564,6 +564,7 @@
   (or (first (filter #(= :goto (:op/kind %)) (:plan/ops plan)))
       {:op/kind :goto :op/channel :browser
        :op/args [(:plan/base-url plan)]
+       :op/assert? false :op/poll? false :op/read-only? false
        :op/source [:goto (:plan/base-url plan)]}))
 
 (defn probe-runtime!
@@ -581,6 +582,7 @@
                      :plan/ops [(goto-op plan)
                                 {:op/kind :eval-cljs :op/channel :runtime
                                  :op/args [form]
+                                 :op/assert? false :op/poll? false :op/read-only? false
                                  :op/source [:eval-cljs form]}])
         res   (run-plan! deps probe)]
     (if (r/err? res)

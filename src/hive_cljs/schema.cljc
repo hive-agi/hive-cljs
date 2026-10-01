@@ -124,13 +124,29 @@
   [:enum :browser :runtime])
 
 (def Op
-  "Compiled step: the port-neutral instruction an adapter interprets."
+  "Compiled step: the port-neutral instruction an adapter interprets.
+
+   The `?` flags are the step's SEMANTICS, stamped by the rule that defines
+   its kind, so the boundary reads the op instead of a membership set it would
+   otherwise have to keep in step with the vocabulary:
+
+   - `:op/assert?`    the value the runtime channel returns IS the verdict — a
+                      falsy answer fails the step
+   - `:op/poll?`      a condition polled until it holds, not asserted once
+   - `:op/read-only?` the step only observes, so an app-db invariant need not
+                      be re-asserted after it
+
+   Optional: an op carrying none (a hand-built one, a third-party rule written
+   before the flags existed) falls back to `hive-cljs.step`'s kind sets."
   [:map {:closed true}
    [:op/kind :keyword]
    [:op/channel OpChannel]
    [:op/args [:vector :any]]
    [:op/frame {:optional true} :keyword]
    [:op/expect {:optional true} [:map-of :keyword :any]]
+   [:op/assert? {:optional true} :boolean]
+   [:op/poll? {:optional true} :boolean]
+   [:op/read-only? {:optional true} :boolean]
    [:op/source Step]])
 
 (def Viewport

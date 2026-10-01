@@ -497,3 +497,28 @@ no edit to existing code, and an earlier rule can shadow a built-in one.
 
 For a browser kind, also add a `perform-op` defmethod in the adapter — it
 dispatches on `:op/kind`, so that too is open for extension.
+
+### Step semantics travel on the op
+
+What a kind *means* is carried by the op it compiles to, not by a list inside
+hive-cljs, so a new kind needs no edit here to behave correctly:
+
+| flag             | meaning                                                         |
+|------------------|-----------------------------------------------------------------|
+| `:op/assert?`    | the runtime channel's returned value IS the verdict — falsy fails |
+| `:op/poll?`      | a condition polled until it holds (`:wait-for-*`), not asserted once |
+| `:op/read-only?` | the step only observes, so a `:mutations` app-db invariant skips it |
+
+A runtime assertion of your own stamps them on the op it returns:
+
+```clojure
+(r/ok {:op/kind :expect-swiped :op/channel :runtime :op/args [dir]
+       :op/assert? true :op/poll? false :op/read-only? true
+       :op/source (vec st)})
+```
+
+A rule may also implement `hive-cljs.step/IStepSemantics` to report the same
+map without compiling a step; every built-in rule does. An op carrying no flag
+falls back to `step/assertion-kinds`, `step/poll-kinds` and
+`step/read-only-kinds`, so hand-built ops and rules written before the flags
+existed keep their old behaviour.

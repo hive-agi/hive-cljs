@@ -24,6 +24,13 @@
   (compile-op [this step]
     "Result of a `schema/Op`, or an :step/malformed error."))
 
+(defprotocol IStepSemantics
+  "What a rule's kind MEANS once compiled — optional beside `IStepRule`, so a
+   rule written before it existed still compiles."
+  (semantics [this]
+    "Map of the op flags this rule stamps: `:op/assert?`, `:op/poll?`,
+     `:op/read-only?` (see `schema/Op`)."))
+
 ;; =============================================================================
 ;; Helpers
 ;; =============================================================================
@@ -31,12 +38,27 @@
 (defn- kind [step] (first step))
 (defn- args [step] (vec (rest step)))
 
+(def semantic-flags
+  "The per-step facts an op carries, each answered by its rule."
+  [:op/assert? :op/poll? :op/read-only?])
+
+(defn- semantics-of
+  "Op flags for a rule declaring the tags in `sem`, a subset of
+   #{:assert :poll :read-only}. Every flag is stated, false included, so an op
+   from a built-in rule never falls back to the kind sets."
+  [sem]
+  (let [sem (set sem)]
+    {:op/assert?    (contains? sem :assert)
+     :op/poll?      (contains? sem :poll)
+     :op/read-only? (contains? sem :read-only)}))
+
 (defn- op
-  [step channel & {:keys [expect] :as _opts}]
-  (cond-> {:op/kind    (kind step)
-           :op/channel channel
-           :op/args    (args step)
-           :op/source  (vec step)}
+  [step channel & {:keys [expect sem] :as _opts}]
+  (cond-> (merge {:op/kind    (kind step)
+                  :op/channel channel
+                  :op/args    (args step)
+                  :op/source  (vec step)}
+                 sem)
     expect (assoc :op/expect expect)))
 
 (defn- arity-err
@@ -56,38 +78,43 @@
       (assoc res :step step :kind (kind step)))))
 
 (defn- fixed-rule
-  [step-kind arity channel selector-dialect]
-  (reify IStepRule
-    (rule-id [_] step-kind)
-    (applies? [_ step] (= step-kind (kind step)))
-    (compile-op [_ step]
-      (cond
-        (not= arity (count (args step))) (arity-err step arity)
-        selector-dialect (compile-selector-arg step (op step channel) selector-dialect)
-        :else (r/ok (op step channel))))))
+  [step-kind arity channel selector-dialect sem]
+  (let [flags (semantics-of sem)]
+    (reify
+      IStepRule
+      (rule-id [_] step-kind)
+      (applies? [_ step] (= step-kind (kind step)))
+      (compile-op [_ step]
+        (let [compiled (op step channel :sem flags)]
+          (cond
+            (not= arity (count (args step))) (arity-err step arity)
+            selector-dialect (compile-selector-arg step compiled selector-dialect)
+            :else (r/ok compiled))))
+      IStepSemantics
+      (semantics [_] flags))))
 
 (defn- browser-rule
   "Rule for a browser-channel step of fixed arity with a leading url or value
-   that is NOT a selector."
-  [step-kind arity]
-  (fixed-rule step-kind arity :browser nil))
+   that is NOT a selector. `sem` tags its semantics (see `semantics-of`)."
+  [step-kind arity & sem]
+  (fixed-rule step-kind arity :browser nil sem))
 
 (defn- selector-rule
   "Rule for a browser-channel step whose first argument is a selector: a
    string, or selector data (`hive-cljs.selector`) compiled here, at the one
    point a step reaches the browser."
-  [step-kind arity]
-  (fixed-rule step-kind arity :browser :playwright))
+  [step-kind arity & sem]
+  (fixed-rule step-kind arity :browser :playwright sem))
 
 (defn- runtime-rule
-  [step-kind arity]
-  (fixed-rule step-kind arity :runtime nil))
+  [step-kind arity & sem]
+  (fixed-rule step-kind arity :runtime nil sem))
 
 (defn- css-selector-rule
   "Runtime rule whose first argument is a selector the PAGE evaluates with
    querySelectorAll, so Playwright-only pseudo-classes are refused."
-  [step-kind arity]
-  (fixed-rule step-kind arity :runtime :css))
+  [step-kind arity & sem]
+  (fixed-rule step-kind arity :runtime :css sem))
 
 ;; =============================================================================
 ;; Rules — ordered; first match wins
@@ -107,33 +134,37 @@
    (selector-rule :hover 1)])
 
 (def synchronisation-rules
-  [(selector-rule :wait-for 1)
-   (browser-rule :wait-ms 1)])
+  [(selector-rule :wait-for 1 :read-only)
+   (browser-rule :wait-ms 1 :read-only)])
 
 (def ^:private no-errors-rule
   "`[:expect-no-errors]` or `[:expect-no-errors {:ignore [\"favicon\"]}]`: the
    page logged no console error and threw no uncaught error since it opened."
-  (reify IStepRule
-    (rule-id [_] :expect-no-errors)
-    (applies? [_ step] (= :expect-no-errors (kind step)))
-    (compile-op [_ step]
-      (let [as (args step)]
-        (cond
-          (> (count as) 1) (arity-err step 1)
-          (and (seq as) (not (m/validate s/ErrorsOpts (first as))))
-          (r/err :step/malformed
-                 {:step step :kind :expect-no-errors
-                  :hint "options are a map of :sources #{:console :pageerror} and :ignore [\"substring\" …]"})
-          :else (r/ok (op step :browser)))))))
+  (let [flags (semantics-of [:read-only])]
+    (reify
+      IStepRule
+      (rule-id [_] :expect-no-errors)
+      (applies? [_ step] (= :expect-no-errors (kind step)))
+      (compile-op [_ step]
+        (let [as (args step)]
+          (cond
+            (> (count as) 1) (arity-err step 1)
+            (and (seq as) (not (m/validate s/ErrorsOpts (first as))))
+            (r/err :step/malformed
+                   {:step step :kind :expect-no-errors
+                    :hint "options are a map of :sources #{:console :pageerror} and :ignore [\"substring\" …]"})
+            :else (r/ok (op step :browser :sem flags)))))
+      IStepSemantics
+      (semantics [_] flags))))
 
 (def dom-assertion-rules
-  [(selector-rule :expect-text 2)
-   (selector-rule :expect-value 2)
-   (selector-rule :expect-visible 1)
-   (selector-rule :expect-hidden 1)
-   (selector-rule :expect-count 2)
-   (selector-rule :expect-attr 3)
-   (browser-rule :expect-url 1)
+  [(selector-rule :expect-text 2 :read-only)
+   (selector-rule :expect-value 2 :read-only)
+   (selector-rule :expect-visible 1 :read-only)
+   (selector-rule :expect-hidden 1 :read-only)
+   (selector-rule :expect-count 2 :read-only)
+   (selector-rule :expect-attr 3 :read-only)
+   (browser-rule :expect-url 1 :read-only)
    no-errors-rule])
 
 (defn- probe-problem
@@ -148,16 +179,19 @@
 (defn- probe-rule
   "A runtime rule whose argument at `idx` may be a probe form, checked here so
    an unrenderable one fails the PLAN rather than reaching the page."
-  [step-kind arity idx locals]
-  (let [base (runtime-rule step-kind arity)]
-    (reify IStepRule
+  [step-kind arity idx locals & sem]
+  (let [base (apply runtime-rule step-kind arity sem)]
+    (reify
+      IStepRule
       (rule-id [_] step-kind)
       (applies? [_ step] (= step-kind (kind step)))
       (compile-op [_ step]
         (let [res (compile-op base step)]
           (if-let [why (and (r/ok? res) (probe-problem (nth (args step) idx) locals))]
             (r/err :step/malformed {:step step :kind step-kind :probe why})
-            res))))))
+            res)))
+      IStepSemantics
+      (semantics [_] (semantics base)))))
 
 (def runtime-rules
   "Steps routed to ICljsEval instead of the browser.
@@ -174,23 +208,27 @@
 
    The `:wait-for-*` kinds are the condition-wait counterpart of the DOM-level
    `:wait-for`: same expression as the matching `:expect-*`, polled until the
-   run's timeout instead of asserted once."
+   run's timeout instead of asserted once.
+
+   Each rule states its semantics (`:assert` — the returned value is the
+   verdict; `:poll` — polled until it holds; `:read-only` — observes only), and
+   the compiled op carries them, so the boundary reads the op, not a list."
   [(runtime-rule :eval-cljs 1)
    (runtime-rule :dispatch 1)
-   (runtime-rule :expect-sub 2)
-   (runtime-rule :expect-db 2)
-   (runtime-rule :wait-for-sub 2)
-   (runtime-rule :wait-for-db 2)
+   (runtime-rule :expect-sub 2 :assert :read-only)
+   (runtime-rule :expect-db 2 :assert :read-only)
+   (runtime-rule :wait-for-sub 2 :poll :read-only)
+   (runtime-rule :wait-for-db 2 :poll :read-only)
    (probe-rule :eval-js 1 0 {})
-   (probe-rule :expect-js 1 0 {})
-   (probe-rule :wait-for-js 1 0 {})
-   (css-selector-rule :expect-fits 1)
-   (probe-rule :expect-state 2 1 {'v "v"})
-   (probe-rule :wait-for-state 2 1 {'v "v"})])
+   (probe-rule :expect-js 1 0 {} :assert)
+   (probe-rule :wait-for-js 1 0 {} :poll)
+   (css-selector-rule :expect-fits 1 :assert :read-only)
+   (probe-rule :expect-state 2 1 {'v "v"} :assert)
+   (probe-rule :wait-for-state 2 1 {'v "v"} :poll)])
 
-;; Semantics of a runtime kind live NEXT TO the rule that defines it, so adding
-;; a kind is one file rather than two. The boundary reads these rather than
-;; carrying a step vocabulary it has no business knowing.
+;; FALLBACK sets for an op that carries no semantic flag — one built by hand,
+;; or by a third-party rule written before ops carried their semantics. An op
+;; compiled by a built-in rule states every flag and never reaches these.
 
 (def assertion-kinds
   "Runtime kinds whose returned value IS the assertion — a falsy answer fails
@@ -202,8 +240,37 @@
    once."
   #{:wait-for-sub :wait-for-db :wait-for-js :wait-for-state})
 
+(def read-only-kinds
+  "Steps that only observe — nothing they do can corrupt app-db."
+  #{:expect-text :expect-value :expect-visible :expect-hidden :expect-count
+    :expect-attr :expect-url :expect-no-errors :hive-cljs/at-origin :expect-sub :expect-db :expect-fits :wait-for
+    :wait-for-sub :wait-for-db :wait-ms :screenshot})
+
+(defn- flag
+  "The op's own answer for `k`, else membership of its kind in `fallback`."
+  [op k fallback]
+  (let [v (get op k)]
+    (if (some? v)
+      (boolean v)
+      (contains? fallback (:op/kind op)))))
+
+(defn assertion-op?
+  "True when the runtime value `op` returns IS its verdict."
+  [op]
+  (flag op :op/assert? assertion-kinds))
+
+(defn poll-op?
+  "True when `op` polls a condition until it holds."
+  [op]
+  (flag op :op/poll? poll-kinds))
+
+(defn read-only-op?
+  "True when `op` only observes, so app-db cannot change under it."
+  [op]
+  (flag op :op/read-only? read-only-kinds))
+
 (def artifact-rules
-  [(browser-rule :screenshot 1)])
+  [(browser-rule :screenshot 1 :read-only)])
 
 (def default-rules
   (vec (concat navigation-rules

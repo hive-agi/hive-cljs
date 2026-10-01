@@ -199,7 +199,9 @@ every op lives in the `shadow.cljs` namespace, and build status arrives via the
 sync-db rather than a subscribe topic.
 
 **`step`** is an ordered `IStepRule` chain — first match wins, so a new step kind
-is an appended rule and an earlier rule can shadow a built-in. See
+is an appended rule and an earlier rule can shadow a built-in. A rule stamps
+its kind's semantics (`:op/assert?`, `:op/poll?`, `:op/read-only?`) onto the
+op, and `boundary` reads the op rather than a membership set. See
 [steps.md](steps.md#adding-a-step-kind).
 
 `step` is also where authored **data** becomes text. A selector datum (`:#go`,
