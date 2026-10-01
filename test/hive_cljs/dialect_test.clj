@@ -11,6 +11,7 @@
             [hive-cljs.boundary :as boundary]
             [hive-cljs.dialect.js :as js]
             [hive-cljs.dialect.re-frame :as re-frame]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.ports :as ports]
             [hive-cljs.stub.ports :as stub]
             [hive-dsl.result :as r]))
@@ -58,6 +59,64 @@
             EDN form and must stay authorable"
     (is (= (re-frame/assertion-source (op :expect-sub [:user] 'some?))
            (re-frame/assertion-source (op :expect-sub [:user] "some?"))))))
+
+(def ^:private printer-bindings
+  "Every printer-var setting a caller's thread could plausibly carry."
+  (for [ns-maps [true false]
+        length  [nil 0 2]
+        level   [nil 1]
+        meta?   [true false]
+        readably [true false]]
+    {#'*print-namespace-maps* ns-maps
+     #'*print-length*         length
+     #'*print-level*          level
+     #'*print-meta*           meta?
+     #'*print-readably*       readably}))
+
+(def ^:private sample-forms
+  [(list 'when-not (list '= :ok (list :state (list 'plato.fit/verdict-for "welcome")))
+         (list 'throw (list 'ex-info "not ok" {:app/step 1 :app/why [1 2 3 4 5]})))
+   (with-meta '(fn [v] (= v "pedro")) {:line 3})
+   [:user/login {:user/name "pedro" :user/roles #{:admin}}]
+   '(get-in db [:a [:b [:c [:d]]]])])
+
+(deftest a-form-renders-the-same-source-whatever-the-callers-printer-vars
+  ;; pr-str obeys the CALLER's printer vars: *print-length* truncates a vector
+  ;; to (1 2 ...), *print-namespace-maps* rewrites {:a/x 1} as #:a{:x 1},
+  ;; *print-readably* false drops a string's quotes. Each of those changes what
+  ;; the app is asked, so the source must be thread-independent.
+  (let [ops      (concat (map #(op :eval-cljs %) sample-forms)
+                         [(op :expect-sub [:user/current {:user/id 1}] '(fn [v] (= v "pedro")))
+                          (op :expect-db [:a :b :c :d] '(fn [v] (contains? #{:x/y} v)))
+                          (op :dispatch [:user/login {:user/name "pedro"}])])
+        baseline (mapv re-frame/assertion-source ops)]
+    (testing "the baseline is plain readable source"
+      (is (str/includes? (first baseline) "\"welcome\""))
+      (is (str/includes? (first baseline) "{:app/step 1, :app/why [1 2 3 4 5]}"))
+      (is (not (str/includes? (second baseline) "^{")) "no metadata leaks into source"))
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= baseline (mapv re-frame/assertion-source ops))
+            (str "source changed under " (pr-str (update-keys b #(.sym ^clojure.lang.Var %)))))))))
+
+(deftest the-pinned-printer-reads-back-as-the-form-it-printed
+  (doseq [b printer-bindings
+          f sample-forms]
+    (with-bindings b
+      (is (= f (read-string (source/pr-source f)))))))
+
+(deftest a-string-is-the-escape-hatch-and-passes-through-verbatim
+  (doseq [b printer-bindings]
+    (with-bindings b
+      (is (= "#(= % \"pedro\")" (source/form->string "#(= % \"pedro\")")))
+      (is (= "(#(> (count %) 3) @(re-frame.core/subscribe [:items]))"
+             (re-frame/assertion-source (op :expect-sub [:items] "#(> (count %) 3)")))))))
+
+(deftest the-js-dialect-also-pins-the-printer
+  (let [base (js/assertion-source (op :expect-state [:user/a 1] "v != null"))]
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= base (js/assertion-source (op :expect-state [:user/a 1] "v != null"))))))))
 
 (deftest the-re-frame-dialect-also-renders-the-javascript-kinds
   ;; A page compiled from ClojureScript is still a page: the stack-agnostic

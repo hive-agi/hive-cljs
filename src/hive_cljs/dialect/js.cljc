@@ -16,6 +16,7 @@
    `installer`, the probe that answers them. Rendering is portable; loading the
    probe off the classpath is not, so only that part is JVM-side."
   (:require [clojure.string :as str]
+            [hive-cljs.dialect.source :as src]
             #?(:clj [clojure.java.io :as io])))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -23,9 +24,10 @@
 ;; SPDX-License-Identifier: MIT
 
 (defn expr
-  "Source text an authored argument contributes."
+  "Source text an authored argument contributes: a string verbatim, a form
+   printed under pinned printer vars."
   [x]
-  (if (string? x) x (pr-str x)))
+  (src/form->string x))
 
 (defn truthy-value
   "JS yielding the VALUE when it is truthy and false when it is not.
@@ -80,10 +82,10 @@
 (defn- json-scalar
   [x]
   (cond
-    (keyword? x) (pr-str (name x))
-    (string? x)  (pr-str x)
+    (keyword? x) (src/pr-source (name x))
+    (string? x)  (src/pr-source x)
     (number? x)  (str x)
-    :else        (pr-str (str x))))
+    :else        (src/pr-source (str x))))
 
 (defn json-path
   "A path vector as a JSON array literal. Segments are identifiers and indices,
@@ -102,7 +104,7 @@
    genuinely absent (an ordinary assertion failure, which reads null)."
   [path]
   (str "(() => { if (!window." probe-key ") throw new Error("
-       (pr-str probe-missing-message) "); return window." probe-key ".read("
+       (src/pr-source probe-missing-message) "); return window." probe-key ".read("
        (json-path path) "); })()"))
 
 (defn state-assertion
@@ -138,7 +140,7 @@
    happy."
   ([selector] (fits-source selector 1))
   ([selector tolerance]
-   (let [sel (pr-str selector)]
+   (let [sel (src/pr-source selector)]
      (str "(() => {\n"
           "  const tol = " (double tolerance) ";\n"
           "  const sel = " sel ";\n"
