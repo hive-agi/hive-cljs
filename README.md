@@ -223,6 +223,65 @@ underneath, for hand-written tests and ad-hoc step vectors.
 Same execution path as the tool and the watcher. See
 [setup.md](docs/setup.md#7-in-a-test-suite).
 
+## Fit and derive
+
+Two pure `.cljc` libraries ride along with the addon. Neither needs a build, a
+browser or a REPL.
+
+**`hive-cljs.fit`** checks whether a laid-out thing (a slide, a card, a print
+page) stays inside the box it was given. It has one judge and accepts many
+measurers. A measurer is a `ports/IFitSource`, and it reports at one of two
+rungs: `:measured` (read off a layout engine) or `:estimated` (a box model).
+**`hive-cljs.fit.test/deffit`** turns a source into `clojure.test` vars:
+
+```clojure
+(ns my.deck.fit-gate-test
+  (:require [hive-cljs.fit.test :refer [deffit]]))
+
+(deffit deck
+  {:source   (my.deck/estimated-source)  ; ports/IFitSource
+   :universe (my.deck/content-model)     ; ports/IFitUniverse, from the document model
+   :policy   {:fit/exempt {:code "no deck ships a code slide yet"}}})
+;; => deck-was-measured, deck-rung-holds, deck-fits, deck-covers-model
+```
+
+Two of its rules are easy to miss, and missing either one gives you a gate that
+passes for the wrong reason:
+
+- **A source declares its own rung, and an estimated finding inside the
+  source's stated `:fit/margin` never fails a build.** Only a finding larger
+  than the margin fails. Smaller ones warn. A box model says `:estimated`
+  however confident it is. `:fit/strict? true` turns every warning into a
+  failure.
+- **A coverage universe must come from the document model, not from the source
+  being checked.** Otherwise the assertion is X ⊆ X, which holds for every X.
+
+A source that measured nothing and a universe that is empty are both
+`:unavailable`, never a pass.
+
+**`hive-cljs.derive`** is forward chaining over tuple facts. Rules are
+conjunctions of `?var` patterns with an optional arithmetic guard. `run` applies
+them until nothing new appears, and records provenance for every derived fact
+(`why`, `trace`, `explain`). `run-strata` adds stratified aggregation between
+fixpoints.
+
+```clojure
+(require '[hive-cljs.derive :as d])
+
+(def fx (d/run [(d/rule :illegible "Rendered below the 16px floor."
+                        '[[:size ?el ?px] [:scale :slide ?s]]
+                        (fn [{:syms [?el]}] [:illegible ?el])
+                        (fn [{:syms [?px ?s]}] (< (* ?px ?s) 16)))]
+               #{[:size :h1 40] [:size :body 18] [:scale :slide 0.5]}))
+
+(:derived fx)                    ; => #{[:illegible :body]}
+(d/explain fx [:illegible :body])
+;; => "[:illegible :body] by :illegible from [:size :body 18], [:scale :slide 0.5]"
+```
+
+Full reference with runnable examples: **[docs/fit.md](docs/fit.md)**. The worked
+example of a real gate is plato's `gate/plato/fit_gate_test.clj`.
+
 ## Installing
 
 One line in the host's `local.deps.edn`:
