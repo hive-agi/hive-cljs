@@ -66,6 +66,7 @@ what the data cannot say: see
 | **[Setting up a project](docs/setup.md)** | nothing → a green scenario, ClojureScript or otherwise, with the traps that cost real time |
 | **[Configuration reference](docs/configuration.md)** | `.hive-project.edn` vs `hive-cljs.edn`, every key, every default |
 | **[Step reference](docs/steps.md)** | the browser + runtime vocabularies, semantics, adding a kind |
+| **[Generative walks](docs/walks.md)** | a step alphabet instead of a step vector: test.check generates walks and shrinks a failure to a minimal repro |
 | **[Mounting in a host](docs/hosting.md)** | wiring into hive-mcp, why a subdomain, diagnosing a silent mount |
 | **[Architecture](docs/architecture.md)** | CPPB layers, the ports, the toolchain and dialect seams, extension points |
 | **[Runnable example](example/)** | a wired shadow-cljs + re-frame app you can `cljs e2e run` against |
