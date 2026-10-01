@@ -182,32 +182,45 @@
    happy."
   ([selector] (fits-source selector 1))
   ([selector tolerance]
-   (let [sel (src/pr-source selector)]
-     (str "(() => {\n"
-          "  const tol = " (double tolerance) ";\n"
-          "  const sel = " sel ";\n"
-          "  const els = Array.from(document.querySelectorAll(sel));\n"
-          "  if (!els.length) throw new Error('expect-fits: nothing matches ' + sel);\n"
-          "  const vw = window.innerWidth;\n"
-          "  let measured = 0, over = 0;\n"
-          "  for (const el of els) {\n"
-          "    const r = el.getBoundingClientRect();\n"
-          "    if (!(r.width > 0) || !(r.height > 0)) continue;\n"
-          "    measured++;\n"
-          "    if (r.right > vw + tol || r.left < -tol) { over++; continue; }\n"
-          "    if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol) over++;\n"
-          "  }\n"
-          "  if (!measured) throw new Error('expect-fits: ' + els.length +\n"
-          "    ' element(s) match ' + sel + ' and none has a rectangle');\n"
-          "  return over ? false : measured;\n"
-          "})()"))))
+   (probe/->js
+    '(let [els (dom/all sel)]
+       (if (zero? (count els))
+         (throw (new js/Error (str "expect-fits: nothing matches " sel)))
+         (let [vw (.-innerWidth js/window)]
+           (loop [i 0 measured 0 over 0]
+             (if (< i (count els))
+               (let [el (aget els i)
+                     r  (.getBoundingClientRect el)]
+                 (cond
+                   (not (and (> (.-width r) 0) (> (.-height r) 0)))
+                   (recur (inc i) measured over)
+
+                   (or (> (.-right r) (+ vw tol)) (< (.-left r) (- tol)))
+                   (recur (inc i) (inc measured) (inc over))
+
+                   (and (> (.-clientWidth el) 0)
+                        (> (.-scrollWidth el) (+ (.-clientWidth el) tol)))
+                   (recur (inc i) (inc measured) (inc over))
+
+                   :else
+                   (recur (inc i) (inc measured) over)))
+               (cond
+                 (zero? measured)
+                 (throw (new js/Error (str "expect-fits: " (count els)
+                                           " element(s) match " sel
+                                           " and none has a rectangle")))
+                 (pos? over) false
+                 :else measured))))))
+    {'sel (src/pr-source (str selector))
+     'tol (str "(" (double tolerance) ")")})))
 
 ;; =============================================================================
 ;; Contrast sampling
 ;; =============================================================================
 
-(def ^:private backdrop-js
-  "JS collecting an element's background LAYERS and the opacity above them.
+(def ^:private backdrop-form
+  "Probe form of a function collecting an element's background LAYERS and the
+   opacity above them.
 
    Returns `[layers, opacity]`: every background an ancestor paints, innermost
    first, up to and including the first opaque one, and the product of the
@@ -217,28 +230,56 @@
    is neither of those two colours; opacity separately, because a computed
    `color` does not carry it. Both are folded in `contrast`, not here: this
    side of the boundary collects, it does not decide."
-  (str "const __hcBackdrop = (el) => {\n"
-       "  const layers = [];\n"
-       "  let opacity = 1;\n"
-       "  let n = el;\n"
-       "  while (n) {\n"
-       "    const cs = getComputedStyle(n);\n"
-       "    const o = parseFloat(cs.opacity);\n"
-       "    const c = cs.backgroundColor;\n"
-       "    const m = c && c.match(/^rgba?\\(([^)]+)\\)/);\n"
-       "    let a = 0;\n"
-       "    if (m) {\n"
-       "      const p = m[1].split(/[,\\/\\s]+/).filter(s => s.length);\n"
-       "      a = p.length > 3 ? parseFloat(p[3]) : 1;\n"
-       "      if (a > 0) layers.push(c);\n"
-       "    }\n"
-       "    if (a >= 1) return [layers, opacity];\n"
-       "    if (o >= 0 && o < 1) opacity *= o;\n"
-       "    n = n.parentElement;\n"
-       "  }\n"
-       "  const root = getComputedStyle(document.documentElement).backgroundColor;\n"
-       "  return [layers.concat([root]), opacity];\n"
-       "};\n"))
+  '(fn [el]
+     (loop [n el layers [] opacity 1]
+       (if n
+         (let [cs (js/getComputedStyle n)
+               o  (js/parseFloat (.-opacity cs))
+               c  (.-backgroundColor cs)
+               m  (and c (re-find #"^rgba?\(([^)]+)\)" c))
+               a  (if m
+                    (let [p (filter (fn [s] (pos? (count s)))
+                                    (.split (nth m 1) #"[,/\s]+"))]
+                      (if (> (count p) 3) (js/parseFloat (nth p 3)) 1))
+                    0)
+               layers (if (> a 0) (conj layers c) layers)]
+           (if (>= a 1)
+             [layers opacity]
+             (recur (.-parentElement n)
+                    layers
+                    (if (and (>= o 0) (< o 1)) (* opacity o) opacity))))
+         [(conj layers (.-backgroundColor
+                        (js/getComputedStyle (.-documentElement js/document))))
+          opacity]))))
+
+(def ^:private rows-form
+  "Probe form collecting the rows for `specs`, given `backdrop`."
+  '(mapcat
+    (fn [spec]
+      (let [els (try (.slice (dom/all (get spec :selector)) 0 (get spec :limit))
+                     (catch :default e nil))]
+        (if (nil? els)
+          [[(str (get spec :id) "-selector") nil nil (get spec :role) nil false 1]]
+          (keep-indexed
+           (fn [i el]
+             (let [cs   (js/getComputedStyle el)
+                   b    (backdrop el)
+                   id   (str (get spec :id) "-" i)
+                   side (get spec :side)]
+               (if (= (get spec :role) "non-text")
+                 (let [w (js/parseFloat (get cs (str "border" side "Width")))]
+                   (when-not (or (= (get cs (str "border" side "Style")) "none")
+                                 (not (> w 0)))
+                     [id (get cs (str "border" side "Color")) (nth b 0)
+                      "non-text" nil false (nth b 1)]))
+                 (when-not (or (not (.-textContent el))
+                               (not (.trim (.-textContent el))))
+                   [id (.-color cs) (nth b 0) nil
+                    (js/parseFloat (.-fontSize cs))
+                    (>= (js/parseInt (.-fontWeight cs) 10) 700)
+                    (nth b 1)]))))
+           els))))
+    specs))
 
 (defn- side-name
   "A border side as the computed-style property spells it: `Top`, `Left`, ..."
@@ -246,12 +287,15 @@
   (let [s (name (or side :top))]
     (str (str/upper-case (subs s 0 1)) (str/lower-case (subs s 1)))))
 
-(defn- spec-literal [{:keys [id selector role side limit]}]
-  (str "{id:" (json-scalar (name (or id :sample)))
-       ",selector:" (json-scalar selector)
-       ",role:" (if (= :non-text role) (json-scalar "non-text") "null")
-       ",side:" (json-scalar (side-name side))
-       ",limit:" (long (or limit 10)) "}"))
+(defn- spec-literal
+  "One spec as the map the page reads. Strings throughout, so the probe
+   renders each as its own string literal."
+  [{:keys [id selector role side limit]}]
+  {:id       (name (or id :sample))
+   :selector (str selector)
+   :role     (when (= :non-text role) "non-text")
+   :side     (side-name side)
+   :limit    (long (or limit 10))})
 
 (defn contrast-rows-source
   "JS collecting contrast rows for `specs` out of the page a session is driving.
@@ -271,39 +315,9 @@
    selector the browser rejects, which is reported as one unresolvable row
    instead of aborting every other spec."
   [specs]
-  (str "(() => {\n"
-       backdrop-js
-       "  const out = [];\n"
-       "  const specs = [" (str/join "," (map spec-literal specs)) "];\n"
-       "  for (const spec of specs) {\n"
-       "    let els;\n"
-       "    try {\n"
-       "      els = Array.from(document.querySelectorAll(spec.selector))\n"
-       "        .slice(0, spec.limit);\n"
-       "    } catch (e) {\n"
-       "      out.push([spec.id + '-selector', null, null, spec.role, null, false, 1]);\n"
-       "      continue;\n"
-       "    }\n"
-       "    els.forEach((el, i) => {\n"
-       "      const cs = getComputedStyle(el);\n"
-       "      const backdrop = __hcBackdrop(el);\n"
-       "      const id = spec.id + '-' + i;\n"
-       "      if (spec.role === 'non-text') {\n"
-       "        const w = parseFloat(cs['border' + spec.side + 'Width']);\n"
-       "        if (cs['border' + spec.side + 'Style'] === 'none' || !(w > 0)) return;\n"
-       "        out.push([id, cs['border' + spec.side + 'Color'], backdrop[0],\n"
-       "                  'non-text', null, false, backdrop[1]]);\n"
-       "      } else {\n"
-       "        if (!el.textContent || !el.textContent.trim()) return;\n"
-       "        out.push([id, cs.color, backdrop[0], null,\n"
-       "                  parseFloat(cs.fontSize),\n"
-       "                  parseInt(cs.fontWeight, 10) >= 700,\n"
-       "                  backdrop[1]]);\n"
-       "      }\n"
-       "    });\n"
-       "  }\n"
-       "  return out;\n"
-       "})()"))
+  (probe/->js (list 'let ['backdrop backdrop-form
+                          'specs    (mapv spec-literal specs)]
+                    rows-form)))
 
 ;; =============================================================================
 ;; Op → source

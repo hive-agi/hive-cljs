@@ -164,3 +164,28 @@
       (is (str/includes? (:probe res) "[:li :a :b]"))))
   (testing "a datum step plans like its string twin"
     (is (r/ok? (step/compile-step [:wait-for-js '(= 1 (dom/count :#welcome.ready))])))))
+
+;; =============================================================================
+;; loop/recur, try, regex
+;; =============================================================================
+
+(deftest loop-renders-as-a-while-loop-and-recur-only-in-tail-position
+  (let [js (probe/->js '(loop [i 0 acc 0] (if (< i 3) (recur (inc i) (+ acc i)) acc)))]
+    (is (str/includes? js "while (true)"))
+    (is (str/includes? js "continue;")))
+  (is (str/includes? (probe/problem '(recur 1)) "tail position"))
+  (is (str/includes? (probe/problem '(loop [i 0] (inc (recur i)))) "tail position"))
+  (is (str/includes? (probe/problem '(loop [i 0] (recur i 2))) "recur takes 1")))
+
+(deftest a-regex-renders-as-a-quoted-pattern
+  (is (str/includes? (probe/->js '(re-find #"a\"b" "x"))
+                     (str "new RegExp(" (pr-str (str #"a\"b")) ")"))
+      "a pattern can never close the literal it renders into")
+  (is (str/includes? (probe/problem '(re-find #"(?i)a" "x")) "inline flags")))
+
+(deftest try-catches-default-only
+  (is (str/includes? (probe/->js '(try (dom/all "p") (catch :default e nil))) "catch ("))
+  (is (str/includes? (probe/problem '(try 1 (catch Exception e nil))) "catch :default")))
+
+(deftest throw-takes-a-constructed-error
+  (is (= "(() => { throw (new Error(\"m\")); })()" (probe/->js '(throw (new js/Error "m"))))))

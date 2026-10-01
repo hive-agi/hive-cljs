@@ -201,16 +201,133 @@
     1 (emit ctx env (first body))
     (str "(" (args-list ctx env body) ")")))
 
-(defn- emit-let [ctx env [bv & body]]
+(defn- let-bindings
+  "`[env stmts]` for a `let` binding vector: one `const` per binding, each
+   value emitted under the bindings before it."
+  [ctx env bv]
   (bindings! "let" bv)
-  (let [[env stmts]
-        (reduce (fn [[env stmts] [sym x]]
-                  (let [js-name (local-name ctx sym)]
-                    [(assoc env sym js-name)
-                     (conj stmts (str "const " js-name " = " (emit ctx env x) ";"))]))
-                [env []]
-                (partition 2 bv))]
+  (reduce (fn [[env stmts] [sym x]]
+            (let [js-name (local-name ctx sym)]
+              [(assoc env sym js-name)
+               (conj stmts (str "const " js-name " = " (emit ctx env x) ";"))]))
+          [env []]
+          (partition 2 bv)))
+
+(defn- emit-let [ctx env [bv & body]]
+  (let [[env stmts] (let-bindings ctx env bv)]
     (str "(() => { " (str/join " " stmts) " return " (emit-do ctx env body) "; })()")))
+
+;; -----------------------------------------------------------------------------
+;; Statements — the tail of a `loop`, where `recur` may appear
+;; -----------------------------------------------------------------------------
+
+(defn- tail-head
+  "The known head a tail-position form names, or nil."
+  [env form]
+  (when (and (seq? form) (symbol? (first form)) (not (contains? env (first form))))
+    (head-key (first form))))
+
+(declare emit-tail)
+
+(defn- tail-body
+  "Statements for a `do`-shaped body in tail position."
+  [ctx env body]
+  (if (empty? body)
+    "return null;"
+    (str (apply str (map #(str (emit ctx env %) "; ") (butlast body)))
+         (emit-tail ctx env (last body)))))
+
+(defn- emit-recur [ctx env xs]
+  (let [targets (::recur env)]
+    (when-not targets
+      (bad "recur must be in tail position of a loop" {:args xs}))
+    (when-not (= (count targets) (count xs))
+      (bad (str "recur takes " (count targets) " argument(s), got " (count xs)) {:args xs}))
+    (let [tmps (mapv (fn [_] (local-name* ctx 'recur)) xs)]
+      ;; Every argument is evaluated before any loop local is reassigned,
+      ;; as Clojure's simultaneous rebinding requires.
+      (str "{ "
+           (apply str (map (fn [t x] (str "const " t " = " (emit ctx env x) "; ")) tmps xs))
+           (apply str (map (fn [n t] (str n " = " t "; ")) targets tmps))
+           "continue; }"))))
+
+(defn- emit-tail
+  "A form in tail position as JS STATEMENTS that return its value — or, for a
+   `recur`, rebind the loop's locals and continue."
+  [ctx env form]
+  (let [xs (when (seq? form) (rest form))]
+    (case (tail-head env form)
+      "recur" (emit-recur ctx env xs)
+      "if"    (do (arity! "if" xs #{2 3})
+                  (str "if (" (emit ctx env (first xs)) ") { "
+                       (emit-tail ctx env (second xs)) " } else { "
+                       (emit-tail ctx env (if (= 3 (count xs)) (nth xs 2) nil)) " }"))
+      "when"     (str "if (" (emit ctx env (first xs)) ") { "
+                      (tail-body ctx env (rest xs)) " } else { return null; }")
+      "when-not" (str "if (!(" (emit ctx env (first xs)) ")) { "
+                      (tail-body ctx env (rest xs)) " } else { return null; }")
+      "cond"  (do (when (odd? (count xs)) (bad "cond needs test/expr pairs" {}))
+                  (reduce (fn [else [t x]]
+                            (str "if (" (if (= :else t) "true" (emit ctx env t)) ") { "
+                                 (emit-tail ctx env x) " } else { " else " }"))
+                          "return null;"
+                          (reverse (partition 2 xs))))
+      "do"    (tail-body ctx env xs)
+      "let"   (let [[env stmts] (let-bindings ctx env (first xs))]
+                (str "{ " (str/join " " stmts) " " (tail-body ctx env (rest xs)) " }"))
+      (str "return " (emit ctx (dissoc env ::recur) form) ";"))))
+
+(defn- emit-loop
+  "`(loop [x init …] body)` as a JavaScript while loop inside an IIFE.
+
+   Each iteration rebinds the locals as fresh `const`s, so a closure made in
+   the body keeps the value of ITS iteration, as it would in Clojure."
+  [ctx env [bv & body]]
+  (bindings! "let" bv)
+  (let [pairs   (partition 2 bv)
+        [_ inits]
+        (reduce (fn [[e acc] [sym x]]
+                  (let [n (local-name* ctx sym)]
+                    [(assoc e sym n) (conj acc [sym n (emit ctx e x)])]))
+                [(dissoc env ::recur) []]
+                pairs)
+        cur     (mapv (fn [[sym _ _]] [sym (local-name ctx sym)]) inits)
+        body-env (-> (reduce (fn [e [sym n]] (assoc e sym n)) (dissoc env ::recur) cur)
+                     (assoc ::recur (mapv second inits)))]
+    (str "(() => { "
+         (apply str (map (fn [[_ n x]] (str "let " n " = " x "; ")) inits))
+         "while (true) { "
+         (apply str (map (fn [[_ n _] [_ c]] (str "const " c " = " n "; ")) inits cur))
+         (tail-body ctx body-env body)
+         " } })()")))
+
+(defn- emit-try
+  "`(try body (catch :default e handler))` — JavaScript can only catch
+   everything, so `:default` is the one catch class this language accepts."
+  [ctx env xs]
+  (let [body    (butlast xs)
+        clause  (last xs)]
+    (when-not (and (seq? clause) (= 'catch (first clause)) (= :default (second clause))
+                   (symbol? (nth clause 2 nil)))
+      (bad "try needs a final (catch :default e handler)" {:args xs}))
+    (let [[_ _ e & handler] clause
+          n (local-name ctx e)]
+      (str "(() => { try { return " (emit-do ctx env body) "; } catch (" n ") { return "
+           (emit-do ctx (assoc env e n) handler) "; } })()"))))
+
+(defn- regex? [x]
+  #?(:clj (instance? java.util.regex.Pattern x) :cljs (regexp? x)))
+
+(defn- emit-regex
+  "A regex literal as `new RegExp(…)` over its pattern, quoted as a string
+   literal so a pattern can never close anything it renders into. The pattern
+   must mean the same in both engines — character classes, groups and anchors
+   do; Java's inline flags do not and are refused."
+  [re]
+  (let [p #?(:clj (.pattern ^java.util.regex.Pattern re) :cljs (.-source re))]
+    (when (re-find #"\(\?[a-zA-Z]" p)
+      (bad (str "regex " (pr-str p) " uses inline flags JavaScript does not read") {:regex p}))
+    (str "(new RegExp(" (lit-str p) "))")))
 
 (defn- emit-fn [ctx env xs]
   (let [xs (if (symbol? (first xs)) (rest xs) xs)
@@ -329,9 +446,39 @@
                                (str (coll (e (second xs))) ".join(" (e (first xs)) ")")))
       "boolean" (str "!!(" (a1) ")")
       "throw"   (do (arity! k xs 1)
-                    (when-not (string? (first xs))
-                      (bad "throw takes a literal message string" {:args xs}))
-                    (str "(() => { throw new Error(" (lit-str (first xs)) "); })()"))
+                    (let [x (first xs)]
+                      (cond
+                        (string? x)
+                        (str "(() => { throw new Error(" (lit-str x) "); })()")
+
+                        (and (seq? x) (= 'new (first x)))
+                        (str "(() => { throw " (e x) "; })()")
+
+                        :else
+                        (bad "throw takes a literal message string or a (new js/Error …) form"
+                             {:args xs}))))
+      "recur"   (bad "recur must be in tail position of a loop" {:args xs})
+      "loop"    (emit-loop ctx env xs)
+      "try"     (emit-try ctx env xs)
+      "when-not" (str "(" (e (first xs)) " ? null : " (emit-do ctx env (rest xs)) ")")
+      "pos?"    (str "(" (a1) " > 0)")
+      "zero?"   (str "(" (a1) " === 0)")
+      "conj"    (do (when (empty? xs) (bad "conj needs a collection" {:args xs}))
+                    (str "[..." (coll (e (first xs)))
+                         (apply str (map #(str ", " (e %)) (rest xs))) "]"))
+      "take"    (do (arity! k xs 2) (str (coll (e (second xs))) ".slice(0, Math.max(0, " (e (first xs)) "))"))
+      "keep-indexed" (do (arity! k xs 2)
+                         (let [i (local-name ctx 'i) p (local-name ctx 'x)]
+                           (str (coll (e (second xs))) ".map((" p ", " i ") => ("
+                                (e (first xs)) ")(" i ", " p ")).filter((x) => x != null)")))
+      "mapcat"  (do (arity! k xs 2)
+                    (let [p (local-name ctx 'x)]
+                      (str (coll (e (second xs))) ".flatMap((" p ") => "
+                           (coll (str "(" (e (first xs)) ")(" p ")")) ")")))
+      "re-find" (do (arity! k xs 2)
+                    (str "((m) => m == null ? null : m.length === 1 ? m[0] : "
+                         "Array.from(m, (g) => g ?? null))(String(" (e (second xs)) ").match("
+                         (e (first xs)) "))"))
       "set!"    (do (arity! k xs 2) (emit-set! ctx env (first xs) (second xs)))
       "new"     (do (when (empty? xs) (bad "new needs a constructor" {:args xs}))
                     (when-not (and (symbol? (first xs)) (= "js" (namespace (first xs))))
@@ -418,6 +565,7 @@
                       (str (double form))
                       (str form))
     (keyword? form) (lit-str (kw-str form))
+    (regex? form)   (emit-regex form)
     (symbol? form)  (or (emit-fn-value ctx env form) (emit-symbol env form))
     (vector? form)  (str "[" (args-list ctx env form) "]")
     (map? form)     (emit-map ctx env form)

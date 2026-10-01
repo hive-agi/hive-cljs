@@ -6,7 +6,8 @@
    adapter for it while claiming to name no vendor. The claims here are that the
    rendering is now the channel's own, and that a channel which cannot render a
    step says so instead of letting the step look green."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.shell :as sh]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
             [hive-cljs.dialect.js :as js]
@@ -194,6 +195,36 @@
 ;; Contrast sampling
 ;; =============================================================================
 
+(defn- node-eval
+  "Evaluate `source` in node against a fake page built by `page-js`, which
+   defines `document`, `window` and `getComputedStyle`. The JSON of the
+   result, or `THROW <message>`. nil when node is not installed."
+  [page-js source]
+  (when (try (zero? (:exit (sh/sh "node" "--version"))) (catch Exception _ false))
+    (let [script (str page-js "\n"
+                      "try { console.log(JSON.stringify(" source ")); }\n"
+                      "catch (e) { console.log('THROW ' + e.message); }\n")
+          res    (sh/sh "node" "-e" script)]
+      (str/trim (:out res)))))
+
+(def ^:private fake-page
+  "A page whose elements are plain objects: `el({...})` gives one, `pages`
+   maps a selector to the elements it matches."
+  "const el = (o) => ({ parentElement: null, textContent: '', clientWidth: 0,
+                        scrollWidth: 0, style: {},
+                        getBoundingClientRect: () => o.r ?? {width:0,height:0,left:0,right:0},
+                        ...o });
+   const box = (l, w, extra = {}) => el({ r: {left:l, right:l+w, width:w, height:10}, ...extra });
+   const pages = {};
+   const window = { innerWidth: 100 };
+   const getComputedStyle = (n) => n.style;
+   const document = {
+     documentElement: el({ style: { backgroundColor: 'rgb(255, 255, 255)', opacity: '1' } }),
+     querySelectorAll: (s) => { if (s.includes(':::')) throw new Error('bad selector');
+                                return pages[s] ?? []; } };")
+
+(defn- on-page [setup source] (node-eval (str fake-page "\n" setup) source))
+
 (deftest the-contrast-probe-asks-the-page-what-it-actually-painted
   (let [source (js/contrast-rows-source
                 [{:id :body :selector "p" :limit 3}
@@ -204,32 +235,48 @@
       (is (str/includes? source "documentElement")
           "and the root is the backstop when no ancestor painted one"))
 
-    (testing "it collects the LAYERS and the opacity, and decides neither"
-      (is (str/includes? source "layers.push(c)")
-          "a translucent card over a dark page is neither of those colours")
-      (is (str/includes? source "opacity *= o")
-          "and a computed colour does not carry the opacity property"))
-
     (testing "each spec reaches the page as the selector it named"
       (is (str/includes? source "\"p\""))
       (is (str/includes? source "\".field input\""))
-      (is (str/includes? source "\"non-text\""))
-      (is (str/includes? source "spec.limit")))
+      (is (str/includes? source "\"non-text\"")))
 
     (testing "only :non-text is asserted; text is classified from its size"
-      (is (str/includes? source "role:null")
+      (is (str/includes? source "\"role\": null")
           "a page that stamped 'text' on a heading would raise its bar")
-      (is (str/includes? source "cs.fontSize"))
-      (is (str/includes? source "fontWeight")))
+      (is (str/includes? source "fontSize"))
+      (is (str/includes? source "fontWeight"))))
 
-    (testing "what would be a false failure is skipped, not reported"
-      (is (str/includes? source "=== 'none'")
-          "an element with no border has no edge to measure")
-      (is (str/includes? source "textContent")
-          "and an empty node has no text to read"))
-
-    (testing "rows are positional, so no key spelling crosses the host boundary"
-      (is (str/includes? source "out.push([")))))
+  (testing "on a page"
+    (when-let [out (on-page
+                    "const solid = el({ style: { backgroundColor: 'rgb(1, 2, 3)', opacity: '0.5' } });
+                     const card = el({ parentElement: solid,
+                                       style: { backgroundColor: 'rgba(0, 0, 0, 0.5)', opacity: '0.8' } });
+                     const page = el({ parentElement: card,
+                                       style: { backgroundColor: 'rgb(10 20 30 / 0.5)', opacity: '1' } });
+                     const text = (t, w, parent) => el({ textContent: t, parentElement: parent,
+                       style: { color: 'red', fontSize: '16px', fontWeight: w,
+                                backgroundColor: 'rgba(0,0,0,0)', opacity: '1' } });
+                     const edge = (w, st) => el({ parentElement: card,
+                       style: { borderTopWidth: w, borderTopStyle: st, borderTopColor: 'green', opacity: '1' } });
+                     pages['p'] = [text(' hi ', '700', page), text('  ', '400', page),
+                                   text('x', '400', null), text('y', '400', null)];
+                     pages['.field input'] = [edge('2px', 'solid'), edge('0px', 'solid'), edge('2px', 'none')];"
+                    (js/contrast-rows-source
+                     [{:id :body :selector "p" :limit 3}
+                      {:id :field :selector ".field input" :role :non-text}]))]
+      (testing "it collects the LAYERS and the opacity, and decides neither"
+        (is (str/includes?
+             out "[\"body-0\",\"red\",[\"rgb(10 20 30 / 0.5)\",\"rgba(0, 0, 0, 0.5)\",\"rgb(1, 2, 3)\"],null,16,true,0.8]")
+            "a translucent card over a dark page is neither of those colours,
+             and a computed colour does not carry the opacity property"))
+      (testing "the root is the backstop, and the limit is honoured"
+        (is (str/includes? out "[\"body-2\",\"red\",[\"rgb(255, 255, 255)\"],null,16,false,1]"))
+        (is (not (str/includes? out "body-3"))))
+      (testing "what would be a false failure is skipped, not reported"
+        (is (not (str/includes? out "body-1")) "an empty node has no text to read")
+        (is (str/includes? out "[\"field-0\",\"green\",[\"rgba(0, 0, 0, 0.5)\",\"rgb(1, 2, 3)\"],\"non-text\",null,false,0.8]"))
+        (is (not (str/includes? out "field-1")) "a zero-width border has no edge")
+        (is (not (str/includes? out "field-2")) "nor has a border styled none")))))
 
 (deftest a-border-side-reaches-the-page-as-a-property-that-exists
   (testing "a keyword side is spelled the way computed style spells it"
@@ -237,59 +284,77 @@
                               "Top" "Top" "left" "Left" nil "Top"}]
       (is (str/includes? (js/contrast-rows-source
                           [{:id :e :selector ".x" :role :non-text :side given}])
-                         (str "side:\"" expected "\""))
+                         (str "\"side\": \"" expected "\""))
           (str (pr-str given) " must not emit a property nothing answers to")))))
 
 (deftest one-bad-selector-is-one-bad-spec
   (let [source (js/contrast-rows-source
                 [{:id :bad :selector "p:::nope"} {:id :good :selector "p"}])]
-    (is (str/includes? source "catch (e)")
+    (is (str/includes? source "catch (")
         "a selector the browser rejects must not abort every other spec")
-    (is (str/includes? source "-selector")
-        "it is reported as one unresolvable row instead")))
+    (when-let [out (on-page "pages['p'] = [el({ textContent: 'x',
+                               style: { color: 'red', fontSize: '10px', fontWeight: '400', opacity: '1' } })];"
+                            source)]
+      (is (str/starts-with? out "[[\"bad-selector\",null,null,null,null,false,1],[\"good-0\"")
+          "it is reported as one unresolvable row instead"))))
 
 (deftest a-selector-cannot-smuggle-source-into-the-page
   (let [source (js/contrast-rows-source
                 [{:id :evil :selector "a\"); alert(1); //"}])]
     (testing "the payload survives, INSIDE the string literal it was given as"
-      (is (str/includes? source "selector:\"a\\\"); alert(1); //\"")
+      (is (str/includes? source "\"selector\": \"a\\\"); alert(1); //\"")
           "the quote that would close the literal is escaped, so the rest of
            the selector stays data"))
 
     (testing "and it never appears unescaped, which is what breaking out means"
-      (is (not (str/includes? source "selector:\"a\");"))))))
+      (is (not (str/includes? source "\"selector\": \"a\");"))))))
 
 (deftest expect-fits-asks-one-named-question-instead-of-a-copied-predicate
   ;; The manifest that motivated this carried the same overflow predicate six
   ;; times, once per viewport, because a viewport is per scenario. A step kind
   ;; makes the SELECTOR the only thing that varies.
   (let [source (js/assertion-source (op :expect-fits ".card"))]
+    (is (= source (js/fits-source ".card")))
     (testing "the selector reaches the page as data, inside its own literal"
-      (is (str/includes? source "const sel = \".card\";")))
+      (is (str/includes? source "querySelectorAll(\".card\")")))
 
     (testing "rectangles, because an inline element reports scrollWidth 0 and
               `scrollWidth <= clientWidth` is then 0 <= 0 on every input"
       (is (str/includes? source "getBoundingClientRect")))
 
-    (testing "so the self-clip half is asked only of elements that have a box"
-      (is (str/includes?
-           source
-           "el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol")))
+    (testing "on a page"
+      (let [fits (fn [setup] (on-page setup source))]
+        (when (fits "")
+          (testing "all fit: the number measured"
+            (is (= "2" (fits "pages['.card'] = [box(0, 50), box(10, 20, {clientWidth: 20, scrollWidth: 20})];")))
+            (is (= "1" (fits "pages['.card'] = [box(0, 101)];"))
+                "within the tolerance"))
+          (testing "an overflow answers false, which the runtime channel fails on"
+            (is (= "false" (fits "pages['.card'] = [box(0, 50), box(80, 30)];")))
+            (is (= "false" (fits "pages['.card'] = [box(-5, 50)];"))))
+          (testing "the self-clip half is asked only of elements that have a box"
+            (is (= "false" (fits "pages['.card'] = [box(0, 50, {clientWidth: 50, scrollWidth: 60})];")))
+            (is (= "1" (fits "pages['.card'] = [box(0, 50), el({})];"))
+                "an inline element, 0 <= 0, is neither measured nor a pass by itself"))
+          (testing "nothing measurable THROWS — a gate that could not look must
+                    never read as a gate that looked and was happy"
+            (is (= "THROW expect-fits: nothing matches .card" (fits "")))
+            (is (= "THROW expect-fits: 2 element(s) match .card and none has a rectangle"
+                   (fits "pages['.card'] = [el({}), el({})];")))))))))
 
-    (testing "nothing measurable THROWS — a gate that could not look must never
-              read as a gate that looked and was happy"
-      (is (str/includes? source "throw new Error('expect-fits: nothing matches ' + sel)"))
-      (is (str/includes? source "none has a rectangle")))
-
-    (testing "an overflow answers false, which the runtime channel fails on"
-      (is (str/includes? source "return over ? false : measured;")))))
+(deftest expect-fits-needs-no-probe-installed
+  (is (not (str/includes? (js/fits-source ".card") "__hive__"))
+      "a fit gate runs on any page, not only one the probe was injected into"))
 
 (deftest a-fits-selector-cannot-smuggle-source-into-the-page
   (let [source (js/fits-source "a\"); alert(1); //")]
-    (is (str/includes? source "const sel = \"a\\\"); alert(1); //\";")
+    (is (str/includes? source "querySelectorAll(\"a\\\"); alert(1); //\")")
         "the quote that would close the literal is escaped, so the rest stays data")
-    (is (not (str/includes? source "const sel = \"a\");"))
-        "and it never appears unescaped, which is what breaking out means")))
+    (is (not (str/includes? source "\"a\");"))
+        "and it never appears unescaped, which is what breaking out means")
+    (when-let [out (on-page "" source)]
+      (is (= "THROW expect-fits: nothing matches a\"); alert(1); //" out)
+          "the page sees the selector as one string"))))
 
 (deftest a-page-is-a-page-whatever-compiled-it
   ;; The same argument the JavaScript kinds already carry: a shadow-cljs app
