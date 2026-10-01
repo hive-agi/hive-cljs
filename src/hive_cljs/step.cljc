@@ -6,6 +6,7 @@
    the first applicable rule wins, so a new step kind is a new rule appended to
    `default-rules` — never an edit to the folder."
   (:require [hive-cljs.schema :as s]
+            [hive-cljs.selector :as sel]
             [hive-dsl.result :as r]
             [malli.core :as m]))
 
@@ -43,26 +44,49 @@
          {:step step :kind (kind step) :expected-arity expected
           :got-arity (count (args step))}))
 
-(defn- browser-rule
-  "Rule for a browser-channel step of fixed arity with a leading selector/url."
-  [step-kind arity]
+(defn- compile-selector-arg
+  "Ok of `op` with its leading selector compiled to a string, or the step's
+   `:selector/malformed` error. The authored datum stays in :op/source, so a
+   report still shows what the scenario wrote."
+  [step op dialect]
+  (let [res (sel/compile-selector (first (:op/args op)) {:dialect dialect})]
+    (if (r/ok? res)
+      (r/ok (assoc-in op [:op/args 0] (:ok res)))
+      (assoc res :step step :kind (kind step)))))
+
+(defn- fixed-rule
+  [step-kind arity channel selector-dialect]
   (reify IStepRule
     (rule-id [_] step-kind)
     (applies? [_ step] (= step-kind (kind step)))
     (compile-op [_ step]
-      (if (= arity (count (args step)))
-        (r/ok (op step :browser))
-        (arity-err step arity)))))
+      (cond
+        (not= arity (count (args step))) (arity-err step arity)
+        selector-dialect (compile-selector-arg step (op step channel) selector-dialect)
+        :else (r/ok (op step channel))))))
+
+(defn- browser-rule
+  "Rule for a browser-channel step of fixed arity with a leading url or value
+   that is NOT a selector."
+  [step-kind arity]
+  (fixed-rule step-kind arity :browser nil))
+
+(defn- selector-rule
+  "Rule for a browser-channel step whose first argument is a selector: a
+   string, or selector data (`hive-cljs.selector`) compiled here, at the one
+   point a step reaches the browser."
+  [step-kind arity]
+  (fixed-rule step-kind arity :browser :playwright))
 
 (defn- runtime-rule
   [step-kind arity]
-  (reify IStepRule
-    (rule-id [_] step-kind)
-    (applies? [_ step] (= step-kind (kind step)))
-    (compile-op [_ step]
-      (if (= arity (count (args step)))
-        (r/ok (op step :runtime))
-        (arity-err step arity)))))
+  (fixed-rule step-kind arity :runtime nil))
+
+(defn- css-selector-rule
+  "Runtime rule whose first argument is a selector the PAGE evaluates with
+   querySelectorAll, so Playwright-only pseudo-classes are refused."
+  [step-kind arity]
+  (fixed-rule step-kind arity :runtime :css))
 
 ;; =============================================================================
 ;; Rules — ordered; first match wins
@@ -74,24 +98,24 @@
    (browser-rule :reload 0)])
 
 (def interaction-rules
-  [(browser-rule :click 1)
-   (browser-rule :fill 2)
-   (browser-rule :select 2)
-   (browser-rule :check 1)
-   (browser-rule :press 2)
-   (browser-rule :hover 1)])
+  [(selector-rule :click 1)
+   (selector-rule :fill 2)
+   (selector-rule :select 2)
+   (selector-rule :check 1)
+   (selector-rule :press 2)
+   (selector-rule :hover 1)])
 
 (def synchronisation-rules
-  [(browser-rule :wait-for 1)
+  [(selector-rule :wait-for 1)
    (browser-rule :wait-ms 1)])
 
 (def dom-assertion-rules
-  [(browser-rule :expect-text 2)
-   (browser-rule :expect-value 2)
-   (browser-rule :expect-visible 1)
-   (browser-rule :expect-hidden 1)
-   (browser-rule :expect-count 2)
-   (browser-rule :expect-attr 3)
+  [(selector-rule :expect-text 2)
+   (selector-rule :expect-value 2)
+   (selector-rule :expect-visible 1)
+   (selector-rule :expect-hidden 1)
+   (selector-rule :expect-count 2)
+   (selector-rule :expect-attr 3)
    (browser-rule :expect-url 1)])
 
 (def runtime-rules
@@ -119,7 +143,7 @@
    (runtime-rule :eval-js 1)
    (runtime-rule :expect-js 1)
    (runtime-rule :wait-for-js 1)
-   (runtime-rule :expect-fits 1)
+   (css-selector-rule :expect-fits 1)
    (runtime-rule :expect-state 2)
    (runtime-rule :wait-for-state 2)])
 

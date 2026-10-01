@@ -18,6 +18,40 @@ editor), point `:iframe` at it and every selector and expression below resolves
 in that document instead: see
 [configuration.md](configuration.md#iframe-when-the-application-under-test-is-a-child-document).
 
+## Selectors are data
+
+Every step argument named "selector" below (and `:expect-fits`) takes either a
+CSS/Playwright **string**, passed through untouched, or **selector data** that
+`hive-cljs.selector` compiles while the step compiles:
+
+| Data | Compiles to |
+|---|---|
+| `:#go` / `:li.row.active` | `#go` / `li.row.active` |
+| `{:role "tablist"}` | `[role="tablist"]` |
+| `{:data-testid/prefix "p-"}` | `[data-testid^="p-"]` (also `/suffix` `/contains` `/word`) |
+| `{:disabled true}` | `[disabled]` |
+| `[:li {:has-text "X"} [:button {:data-testid "ok"}]]` | `li:has-text("X") button[data-testid="ok"]`; nesting means descendant |
+| `[:> :nav :a]` / `[:in :main :button]` / `[:or :#a :.b]` | `nav > a` / `main button` / `:is(#a, .b)` |
+| `[:li {:has :button.del :not :.done}]` | `li:has(button.del):not(.done)` |
+
+`:has-text`, `:text-is` and `:visible` are Playwright pseudo-classes. They are
+refused in `:expect-fits`, because that step runs the page's own
+`querySelectorAll`.
+
+Helpers return data, so they compose: `testid`, `testid-prefix`, `role`,
+`within`, `child-of`, `any-of`, `with-text`. `defselector` names a selector
+and compiles a literal one when the namespace loads:
+
+```clojure
+(require '[hive-cljs.selector :as sel])
+(sel/defselector proposal [:li {:data-testid/prefix "site-proposta-"}])
+[:click (sel/within (sel/with-text proposal "X") (sel/testid :button "aprovar"))]
+```
+
+A malformed selector (`[:li :a :b]`, `{}`, `42`) is a `:selector/malformed`
+error when the plan compiles, and carries `:problem`. It never reaches the
+browser, so it cannot turn into a timeout.
+
 ## Browser steps
 
 ### Navigation
@@ -353,6 +387,7 @@ Arity and shape are checked while compiling, before a browser opens:
 [:fill "#a"]      ; => :step/malformed {:expected-arity 2 :got-arity 1 :index 2}
 [:teleport "/x"]  ; => :step/unknown-kind {:known [:goto :back … ]}
 ["goto" "/x"]     ; => :step/no-kind
+[:click [:li :a :b]] ; => :selector/malformed {:problem "…at most one child…"}
 ```
 
 ## Adding a step kind
