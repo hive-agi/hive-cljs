@@ -49,11 +49,16 @@ jobs:
           git config user.email "ci@hive-agi.local"
           git add VERSION
           # [skip ci] stops this push from retriggering the workflow.
-          git commit -m "chore(release): $VER [skip ci]"
+          # A VERSION shipped verbatim is already committed: only a bump has
+          # something to commit, and an empty commit would fail the release.
+          git diff --cached --quiet || git commit -m "chore(release): $VER [skip ci]"
           # Annotated: `git push --follow-tags` ignores lightweight tags,
           # which would publish the artifact and silently drop the tag.
           git tag -a "v$VER" -m "release $VER"
           git push --follow-tags
+          # With no new commit the branch is already up to date; name the tag so
+          # it is pushed either way (a no-op when --follow-tags already sent it).
+          git push origin "v$VER"
 
       - name: Deploy
         env:
