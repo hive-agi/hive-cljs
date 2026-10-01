@@ -5,7 +5,8 @@
    Extension point: `IStepRule`. `compile-step` folds an ORDERED rule vector and
    the first applicable rule wins, so a new step kind is a new rule appended to
    `default-rules` — never an edit to the folder."
-  (:require [hive-cljs.schema :as s]
+  (:require [hive-cljs.dialect.probe :as probe]
+            [hive-cljs.schema :as s]
             [hive-dsl.result :as r]
             [malli.core :as m]))
 
@@ -94,6 +95,29 @@
    (browser-rule :expect-attr 3)
    (browser-rule :expect-url 1)])
 
+(defn- probe-problem
+  "Why a JS-vocabulary step's probe FORM cannot render, or nil. A string is
+   JavaScript already and is not checked; a bare dotted symbol passes through
+   as a global name."
+  [x locals]
+  (when-not (or (string? x)
+                (and (symbol? x) (nil? (namespace x)) (not (contains? locals x))))
+    (probe/problem x locals)))
+
+(defn- probe-rule
+  "A runtime rule whose argument at `idx` may be a probe form, checked here so
+   an unrenderable one fails the PLAN rather than reaching the page."
+  [step-kind arity idx locals]
+  (let [base (runtime-rule step-kind arity)]
+    (reify IStepRule
+      (rule-id [_] step-kind)
+      (applies? [_ step] (= step-kind (kind step)))
+      (compile-op [_ step]
+        (let [res (compile-op base step)]
+          (if-let [why (and (r/ok? res) (probe-problem (nth (args step) idx) locals))]
+            (r/err :step/malformed {:step step :kind step-kind :probe why})
+            res))))))
+
 (def runtime-rules
   "Steps routed to ICljsEval instead of the browser.
 
@@ -116,12 +140,12 @@
    (runtime-rule :expect-db 2)
    (runtime-rule :wait-for-sub 2)
    (runtime-rule :wait-for-db 2)
-   (runtime-rule :eval-js 1)
-   (runtime-rule :expect-js 1)
-   (runtime-rule :wait-for-js 1)
+   (probe-rule :eval-js 1 0 {})
+   (probe-rule :expect-js 1 0 {})
+   (probe-rule :wait-for-js 1 0 {})
    (runtime-rule :expect-fits 1)
-   (runtime-rule :expect-state 2)
-   (runtime-rule :wait-for-state 2)])
+   (probe-rule :expect-state 2 1 {'v "v"})
+   (probe-rule :wait-for-state 2 1 {'v "v"})])
 
 ;; Semantics of a runtime kind live NEXT TO the rule that defines it, so adding
 ;; a kind is one file rather than two. The boundary reads these rather than

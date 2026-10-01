@@ -160,6 +160,41 @@ Elm port writing to `window`, a Redux store, a Svelte store, a signal. Nothing
 here reaches into a framework's internals — which is exactly why it works for
 all of them.
 
+#### A probe form instead of a JavaScript string
+
+The argument to `:eval-js`, `:expect-js` and `:wait-for-js` (and the predicate
+of `:expect-state` / `:wait-for-state`) may be a **form** instead of a string.
+`hive-cljs.dialect.probe` renders it to one JavaScript expression, so a manifest
+need not carry JS blobs:
+
+```clojure
+[:wait-for-js (= 1 (dom/count "#welcome .fragment.visible"))]
+[:expect-js   (every? dom/visible? (dom/all "#main [data-composition-id]"))]
+[:expect-js   (>= (count (keys (.-__timelines js/window))) 16)]
+[:expect-js   (let [tl (get (.-__timelines js/window) "animation")]
+                (.seek tl 3)
+                (= 3 (.time tl)))]
+[:expect-state ["model" "loading"] (= v false)]   ; v is the value read
+[:expect-state ["model" "user"] some?]            ; a function is applied to it
+```
+
+| Group | Forms |
+|---|---|
+| DOM | `dom/one` `dom/all` `dom/count` (each `(sel)` or `(root sel)`), `dom/text` `dom/attr` `dom/style` `dom/visible?` `dom/matches?` `dom/has-class?` (element or selector) |
+| core | `=` `not=` `<` `>` `<=` `>=` `+` `-` `*` `/` `mod` `inc` `dec` `min` `max` `and` `or` `not` `if` `when` `cond` `do` `let` `fn` `nil?` `some?` `true?` `false?` `string?` `number?` `count` `empty?` `first` `last` `nth` `keys` `vals` `get` `get-in` `aget` `contains?` `str` `every?` `some` `filter` `remove` `map` |
+| strings | `str/includes?` `str/starts-with?` `str/ends-with?` `str/trim` `str/lower-case` `str/upper-case` `str/blank?` `str/join` |
+| interop | `(.method obj args…)`, `(.-prop obj)`, `js/name`; `window`, `document`, `Math`, `JSON` and a few other globals need no prefix |
+
+JavaScript semantics where they differ: `=` is `===` (two arrays are never
+equal; compare `(str/join "," xs)` instead) and truthiness is JS truthiness.
+`get`/`get-in` are nil-safe. The language is closed: an unknown function or an
+unbound symbol fails the **plan** with `:step/malformed`, before a browser opens,
+rather than reaching the page as a `ReferenceError`. A string is still accepted
+verbatim, as the escape hatch for anything the forms cannot say.
+
+Combined with `:iframe`, `document` is already the child document, so a probe
+needs no prelude to find it.
+
 Two things the JavaScript channel deliberately cannot do, both of which report
 rather than pretend: the `:app-db-schema` invariant, and `cljs e2e mutate`'s
 `--auto` fault derivation. Both mean rewriting the application's own handler

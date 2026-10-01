@@ -16,6 +16,7 @@
    `installer`, the probe that answers them. Rendering is portable; loading the
    probe off the classpath is not, so only that part is JVM-side."
   (:require [clojure.string :as str]
+            [hive-cljs.dialect.probe :as probe]
             #?(:clj [clojure.java.io :as io])))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -23,9 +24,36 @@
 ;; SPDX-License-Identifier: MIT
 
 (defn expr
-  "Source text an authored argument contributes."
-  [x]
-  (if (string? x) x (pr-str x)))
+  "Source text an authored argument contributes.
+
+   A string is JavaScript already and passes through verbatim — the escape
+   hatch. A bare dotted symbol (`window.app.ready`) has always passed through as
+   its own name and still does. Anything else is a probe FORM, rendered by
+   `hive-cljs.dialect.probe`, so a manifest need never carry a JS string blob.
+
+   `locals` names symbols the surrounding expression binds — `v` for a state
+   predicate."
+  ([x] (expr x {}))
+  ([x locals]
+   (cond
+     (string? x) x
+     (and (symbol? x) (nil? (namespace x)) (not (contains? locals x))
+          (re-matches #"^[A-Za-z_$][A-Za-z0-9_$.]*$" (name x)))
+     (name x)
+     :else (probe/->js x locals))))
+
+(def state-locals
+  "Locals a `:expect-state` / `:wait-for-state` predicate sees."
+  {'v "v"})
+
+(defn state-pred
+  "Source of a state predicate. A FUNCTION form (`some?`, `(fn [x] …)`) is
+   applied to the read value, the way the re-frame dialect applies its
+   predicates; anything else is an expression over `v`."
+  [pred]
+  (if (probe/fn-form? pred)
+    (probe/->js (list pred 'v) state-locals)
+    (expr pred state-locals)))
 
 (defn truthy-value
   "JS yielding the VALUE when it is truthy and false when it is not.
@@ -109,12 +137,12 @@
   "Assert `pred` — a JS expression over the bound `v` — against the value at
    `path`. Yields the value when it holds, false when it does not."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return (" (expr pred) ") ? v : false; })()"))
+  (str "(() => { const v = " (read-source path) "; return (" (state-pred pred) ") ? v : false; })()"))
 
 (defn state-probe
   "The polled counterpart of `state-assertion`: `[held? value]`."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return [!!(" (expr pred) "), v]; })()"))
+  (str "(() => { const v = " (read-source path) "; return [!!(" (state-pred pred) "), v]; })()"))
 
 (defn fits-source
   "JS asking whether everything `selector` matches stays inside its box.
