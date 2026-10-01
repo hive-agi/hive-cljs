@@ -293,7 +293,7 @@ example of a real gate is plato's `gate/plato/fit_gate_test.clj`.
 One line in the host's `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.2.21"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.3.0"}
 ```
 
 …or, when hacking on hive-cljs itself, `#:local{:root "../hive-cljs"}`.
@@ -325,6 +325,26 @@ node test/js/probe_test.mjs   # 31 — the injected probe, which Clojure cannot 
 
 No test namespace names a vendor: every test injects a stub through the ports,
 so the suite runs with nothing installed.
+
+## Releasing
+
+A push to `main` that touches `src/`, `resources/` or `deps.edn` runs the suite,
+then `clojure -T:build bump :level :patch`, tags `v{VERSION}` and deploys to
+Clojars. `bump` (overridden in `build.clj`) decides the version from `./VERSION`
+and the newest `v*` tag, compared as semver:
+
+| `VERSION` vs newest tag | published version                    |
+|-------------------------|--------------------------------------|
+| ahead (`0.3.0` > `v0.2.24`) | `VERSION` verbatim — `0.3.0`     |
+| equal (`0.2.24`)        | patch bump — `0.2.25`                |
+| behind (`0.2.23`)       | patch bump of the tag — `0.2.25`     |
+| no tag yet              | `VERSION` verbatim                   |
+
+So to cut a minor or major, set `VERSION` by hand (e.g. `0.3.0`) in the
+commit that lands on `main`; CI publishes exactly that number. Leave it alone
+and every release is the next patch. The rule is the pure
+`hive-cljs.release/decide` (`build/hive_cljs/release.clj`), unit-tested in
+`test/hive_cljs/release_test.clj`; `build/` never enters the jar.
 
 ## License
 
