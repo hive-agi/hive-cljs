@@ -1,0 +1,61 @@
+;; hive-cljs config for the Elm example — the any-stack counterpart of
+;; ../hive-cljs.edn. There is no build server and no nREPL: the :browser
+;; toolchain drives the page, and the page itself is the runtime channel.
+;;
+;; :command is the build verdict — argv run with this directory as cwd, judged
+;; by its exit code. `npx --no-install` finds the elm pinned in package.json
+;; (or one already on PATH) and never downloads anything on its own.
+;;
+;; :http-port is whatever serves public/ (node serve.js); :base-url is inferred
+;; from it for every scenario that names :build :app.
+;;
+;; Selectors are data (:#count is "#count") and predicates are probe forms, not
+;; strings — see docs/steps.md. A malformed one fails the plan before a browser
+;; opens.
+{:project-id "hive-cljs-example-elm"
+ :hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 8471
+                          :command ["npx" "--no-install" "elm" "make"
+                                    "src/Main.elm" "--output=public/app.js"]}}
+ :hive.cljs/e2e
+ {:browser    :chromium
+  :headless   true
+  :timeout-ms 15000
+  :scenarios
+  [{:id :smoke :build :app :tags [:smoke]
+    :doc "The page renders, and the injected probe reached it before Elm started."
+    :steps [[:goto "/"]
+            [:wait-for :h1]
+            [:expect-text :h1 "Inbox"]
+            [:expect-js (some? js/window.__hive__)]
+            [:wait-for-state ["model" "items" "length"] (= v 1)]
+            [:expect-state ["model" "items" 0] (= v "welcome")]
+            [:expect-text :#count "1 message"]
+            [:expect-no-errors]]}
+
+   {:id :add :build :app :tags [:state]
+    :doc "Both channels, one step vector: state first, then the rendering of it."
+    :steps [[:goto "/"]
+            [:wait-for :#add]
+            [:fill :#draft "hello elm"]
+            [:wait-for-state ["model" "draft"] (= v "hello elm")]
+            [:click :#add]
+            [:wait-for-state ["model" "items" "length"] (= v 2)]  ; state
+            [:expect-state ["model" "items" 1] (= v "hello elm")]
+            [:expect-state ["model" "draft"] (= v "")]
+            ;; Elm paints on the next animation frame: state can be ahead of
+            ;; the DOM, so wait for the rendering before asserting on it.
+            [:wait-for [:#count {:has-text "2 messages"}]]
+            [:expect-text :#count "2 messages"]                   ; rendering
+            [:expect-count [:in :#items :li] 2]
+            [:expect-text [:in :#items [:li {:has-text "hello elm"}]] "hello elm"]]}
+
+   {:id :clear :build :app :tags [:state]
+    :doc "No typing involved: only clicks, so it runs where keyboard input cannot."
+    :steps [[:goto "/"]
+            [:wait-for :#clear]
+            [:click :#clear]
+            [:wait-for-state ["model" "items" "length"] (= v 0)]
+            [:wait-for [:#count {:has-text "0 messages"}]]
+            [:expect-text :#count "0 messages"]
+            [:expect-count [:in :#items :li] 0]]}]}}

@@ -362,11 +362,14 @@ update msg model =
 
 ```js
 const app = Elm.Main.init({ node: document.getElementById('root') })
-app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
+if (window.__hive__) app.ports.hiveState.subscribe(window.__hive__.pushed('model'))
 ```
 
-The `?.` is deliberate and is the entire production story: outside a scenario
-nothing injects the probe, so the line is a no-op. No dependency, no build flag,
+The `?.` (and, for a port, the `if`) is deliberate and is the entire production
+story: outside a scenario nothing injects the probe, so the line is a no-op. A
+port needs the explicit `if` rather than `subscribe(window.__hive__?.pushed(…))`:
+that would subscribe `undefined`, and Elm would throw
+`currentSubs[i] is not a function` on every later send. No dependency, no build flag,
 nothing shipped to users.
 
 Now both channels are available in one step vector:

@@ -4,7 +4,7 @@
 // The application authors ONE optional-chained line and depends on nothing:
 //
 //   window.__hive__?.expose('model', () => store.getState())
-//   app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))   // Elm
+//   if (window.__hive__) app.ports.hiveState.subscribe(window.__hive__.pushed('model'))   // Elm
 //
 // In production nothing injects this, `?.` short-circuits, and the line is a
 // no-op — which is why there is no build flag to guard.

@@ -325,7 +325,7 @@ subscriber and exposes the latest value it received — the same shape for a
 websocket or any other push source:
 
 ```js
-app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
+if (window.__hive__) app.ports.hiveState.subscribe(window.__hive__.pushed('model'))
 ```
 
 Values cross a structured-clone boundary, so they are projected to JSON shapes:
