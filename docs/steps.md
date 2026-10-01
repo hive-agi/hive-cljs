@@ -116,10 +116,15 @@ default.
 | `[:expect-count :.row 3]` | selector matches exactly N elements |
 | `[:expect-attr :#menu "aria-expanded" "true"]` | attribute equals exactly |
 | `[:expect-url "/dashboard"]` | current URL CONTAINS the expected string |
+| `[:expect-no-errors]` | no console error was logged and no uncaught page error thrown since the page opened |
+| `[:expect-no-errors {:ignore ["favicon"] :sources #{:pageerror}}]` | same, excusing errors containing a substring or restricted to one source |
 
 `:expect-attr` distinguishes an **absent** attribute from one holding the wrong
 value, because they are different mistakes: `no such attribute` is a selector or
 a spelling to fix, a wrong value is the application to fix.
+
+`:expect-no-errors` options are data, never JS: `:sources` is a set of
+`:console`/`:pageerror` (default both), `:ignore` a vector of substrings.
 
 ### Artifacts
 

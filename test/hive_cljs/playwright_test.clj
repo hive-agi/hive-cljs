@@ -93,3 +93,26 @@
       (is (= "#go" (pw/selector-string "#go")))
       (is (= "#go" (pw/selector-string :#go)))
       (is (thrown? clojure.lang.ExceptionInfo (pw/selector-string [:li :a :b]))))))
+
+(defn- page-at [url] (proxy [Page] [] (url [] url)))
+
+(deftest the-origin-guard-refuses-a-foreign-page
+  (is (= :pass (:state (pw/perform-op {:page (page-at "http://app.test:8080/home")}
+                                      {:op/kind :hive-cljs/at-origin
+                                       :op/args ["http://app.test:8080"]}))))
+  (is (= :fail (:state (pw/perform-op {:page (page-at "https://idp.test/login")}
+                                      {:op/kind :hive-cljs/at-origin
+                                       :op/args ["http://app.test:8080"]})))))
+
+(deftest expect-no-errors-reads-the-recorded-console-and-pageerrors
+  (let [errs    (atom [{:error/source :console :error/text "favicon.ico 404"}
+                       {:error/source :pageerror :error/text "TypeError: x is null"}])
+        session {:errors errs}
+        run     #(:state (pw/perform-op session {:op/kind :expect-no-errors :op/args %}))]
+    (is (= :fail (run [])))
+    (is (= :fail (run [{:ignore ["favicon"]}])))
+    (is (= :pass (run [{:ignore ["favicon" "TypeError"]}])))
+    (is (= :pass (run [{:sources #{:console} :ignore ["favicon"]}])))
+    (testing "a clean page passes"
+      (is (= :pass (:state (pw/perform-op {:errors (atom [])}
+                                          {:op/kind :expect-no-errors :op/args []})))))))

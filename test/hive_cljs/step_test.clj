@@ -137,3 +137,13 @@
       (let [ce (stub/cljs-eval)]
         (boundary/perform-runtime! ce :app (:ok (step/compile-step [:eval-cljs "#(inc %)"])))
         (is (= ["#(inc %)"] (mapv second (stub/evals ce))))))))
+
+(deftest expect-no-errors-is-authored-as-data
+  (testing "bare, and with data options, it compiles to a browser assertion"
+    (is (= :browser (:op/channel (:ok (step/compile-step [:expect-no-errors])))))
+    (is (r/ok? (step/compile-step [:expect-no-errors {:ignore ["favicon"]
+                                                      :sources #{:pageerror}}]))))
+  (testing "JS text is not an option map, and unknown keys are refused"
+    (is (r/err? (step/compile-step [:expect-no-errors "console.error.length === 0"])))
+    (is (r/err? (step/compile-step [:expect-no-errors {:js "x"}])))
+    (is (r/err? (step/compile-step [:expect-no-errors {} {}])))))

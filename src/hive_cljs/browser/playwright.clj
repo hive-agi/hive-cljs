@@ -14,7 +14,9 @@
             [hive-cljs.selector :as selector]
             [hive-dsl.result :as r])
   (:import [com.microsoft.playwright Playwright Browser BrowserType$LaunchOptions
-            BrowserContext Page Page$ScreenshotOptions Locator Frame ElementHandle]
+            BrowserContext Page Page$ScreenshotOptions Locator Frame ElementHandle
+            ConsoleMessage]
+           [java.util.function Consumer]
            [java.nio.file Paths]
 [com.microsoft.playwright Browser$NewContextOptions]))
 
@@ -234,6 +236,62 @@
       (pass)
       (fail (str "expected url to contain " (pr-str expected) ", got " (pr-str actual))))))
 
+(defmethod perform-op :hive-cljs/at-origin
+  [session {[origin] :op/args}]
+  (let [actual (.url (page-of session))]
+    (if (str/starts-with? (str actual) (str origin))
+      (pass actual)
+      (fail (str "page is not on the app origin " (pr-str origin) ", it is on "
+                 (pr-str actual) " — a fault applied here would break nothing")))))
+
+;; =============================================================================
+;; Page errors
+;; =============================================================================
+
+(defn page-errors
+  "Console errors and uncaught page errors recorded on `session` so far, as
+   `[{:error/source :console|:pageerror :error/text \"…\"} …]`."
+  [session]
+  (some-> (:errors session) deref))
+
+(defn unexpected-errors
+  "Recorded `errors` an `:expect-no-errors` options map does not excuse.
+
+   `opts` is data: `:sources` (a set of `:console`/`:pageerror`, default both)
+   and `:ignore` (substrings whose presence excuses an error)."
+  [errors {:keys [sources ignore]}]
+  (let [sources (set (or sources [:console :pageerror]))]
+    (vec (remove (fn [{:error/keys [source text]}]
+                   (or (not (contains? sources source))
+                       (some #(str/includes? (str text) (str %)) ignore)))
+                 errors))))
+
+(defmethod perform-op :expect-no-errors
+  [session {[opts] :op/args}]
+  (let [bad (unexpected-errors (page-errors session) (or opts {}))]
+    (if (empty? bad)
+      (pass "no console or page errors")
+      (fail (str (count bad) " console/page error(s): "
+                 (str/join " | " (map #(str (name (:error/source %)) ": " (:error/text %))
+                                      (take 5 bad))))))))
+
+(defn- record-errors!
+  "Listen for console errors and uncaught page errors on `page`, appending them
+   to `errors`."
+  [^Page page errors]
+  (.onConsoleMessage page
+                     (reify Consumer
+                       (accept [_ m]
+                         (let [^ConsoleMessage m m]
+                           (when (= "error" (.type m))
+                             (swap! errors conj {:error/source :console
+                                                 :error/text   (.text m)}))))))
+  (.onPageError page
+                (reify Consumer
+                  (accept [_ e]
+                    (swap! errors conj {:error/source :pageerror
+                                        :error/text   (str e)})))))
+
 (defmethod perform-op :screenshot
   [session {[label] :op/args}]
   (let [dir  (:artifacts-dir session)
@@ -279,7 +337,9 @@
             ^Page page (.newPage ctx)]
         (when timeout-ms
           (.setDefaultTimeout page (double timeout-ms)))
-        (let [session (cond-> {:pw pw :browser br :context ctx :page page
+        (let [errors  (atom [])
+              _       (record-errors! page errors)
+              session (cond-> {:pw pw :browser br :context ctx :page page :errors errors
                                :artifacts-dir (or artifacts-dir ".hive-cljs/artifacts")}
                         iframe (assoc :iframe iframe))]
           (swap! pw-atom conj session)

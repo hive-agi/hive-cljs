@@ -101,6 +101,14 @@
    [:fn {:error/message "step must start with a keyword"}
     #(keyword? (first %))]])
 
+(def ErrorsOpts
+  "Options of the `:expect-no-errors` step, authored as data — never as JS text.
+   `:sources` narrows which recorded errors count; `:ignore` excuses errors
+   whose text contains any of the substrings."
+  [:map {:closed true}
+   [:sources {:optional true} [:set [:enum :console :pageerror]]]
+   [:ignore {:optional true} [:vector :string]]])
+
 (def Selector
   "What a selector-taking step accepts: a CSS/Playwright string (passed
    through), or selector DATA — a `:tag#id.class` keyword, an attribute map,
@@ -184,6 +192,7 @@
   [:map {:closed true}
    [:fault/id :keyword]
    [:fault/killed? :boolean]
+   [:fault/status {:optional true} [:enum :killed :survived :unapplied]]
    [:fault/by {:optional true} [:vector ScenarioId]]
    [:fault/detail {:optional true} :string]])
 
@@ -193,6 +202,7 @@
    [:mutation/verdicts [:vector FaultVerdict]]
    [:mutation/killed [:vector :keyword]]
    [:mutation/survived [:vector :keyword]]
+   [:mutation/unapplied {:optional true} [:vector :keyword]]
    [:mutation/score [:double {:min 0.0 :max 1.0}]]])
 
 ;; =============================================================================

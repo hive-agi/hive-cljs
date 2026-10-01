@@ -383,7 +383,7 @@
 (def read-only-kinds
   "Steps that only observe — nothing they do can corrupt app-db."
   #{:expect-text :expect-value :expect-visible :expect-hidden :expect-count
-    :expect-attr :expect-url :expect-sub :expect-db :expect-fits :wait-for
+    :expect-attr :expect-url :expect-no-errors :hive-cljs/at-origin :expect-sub :expect-db :expect-fits :wait-for
     :wait-for-sub :wait-for-db :wait-ms :screenshot})
 
 (defn invariant-applies?
@@ -637,6 +637,21 @@
                :run/steps [] :run/error res})))
         plans))
 
+(defn- run-faulted!
+  "Run every plan with `f` injected, marking each report with whether the fault
+   was actually applied. A plan whose app page cannot be determined is not run
+   at all — its fault is unapplied there, not killed."
+  [deps plans f]
+  (mapv (fn [p]
+          (if-not (mutation/injectable? p)
+            {:run/scenario (:plan/scenario p) :run/state :incomplete
+             :run/steps [] :fault/applied? false}
+            (let [injected (mutation/inject p f)
+                  rep      (first (run-plans! deps [injected]))]
+              (assoc rep :fault/applied?
+                     (mutation/applied? rep (mutation/fault-index injected f))))))
+        plans))
+
 (defn run-mutations!
   "Score `plans` against a fault catalog: each fault is injected, the suite is
    re-run, and a suite that stays GREEN failed to notice it.
@@ -660,9 +675,7 @@
                 :summary (mapv verdict/summarize baseline)})
         (r/ok (mutation/report
                (mapv :plan/scenario plans)
-               (mapv (fn [f]
-                       (mutation/verdict
-                        f (run-plans! deps (mapv #(mutation/inject % f) plans))))
+               (mapv (fn [f] (mutation/verdict f (run-faulted! deps plans f)))
                      faults)))))))
 
 ;; =============================================================================

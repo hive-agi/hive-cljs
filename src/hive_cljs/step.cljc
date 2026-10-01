@@ -110,6 +110,22 @@
   [(selector-rule :wait-for 1)
    (browser-rule :wait-ms 1)])
 
+(def ^:private no-errors-rule
+  "`[:expect-no-errors]` or `[:expect-no-errors {:ignore [\"favicon\"]}]`: the
+   page logged no console error and threw no uncaught error since it opened."
+  (reify IStepRule
+    (rule-id [_] :expect-no-errors)
+    (applies? [_ step] (= :expect-no-errors (kind step)))
+    (compile-op [_ step]
+      (let [as (args step)]
+        (cond
+          (> (count as) 1) (arity-err step 1)
+          (and (seq as) (not (m/validate s/ErrorsOpts (first as))))
+          (r/err :step/malformed
+                 {:step step :kind :expect-no-errors
+                  :hint "options are a map of :sources #{:console :pageerror} and :ignore [\"substring\" …]"})
+          :else (r/ok (op step :browser)))))))
+
 (def dom-assertion-rules
   [(selector-rule :expect-text 2)
    (selector-rule :expect-value 2)
@@ -117,7 +133,8 @@
    (selector-rule :expect-hidden 1)
    (selector-rule :expect-count 2)
    (selector-rule :expect-attr 3)
-   (browser-rule :expect-url 1)])
+   (browser-rule :expect-url 1)
+   no-errors-rule])
 
 (defn- probe-problem
   "Why a JS-vocabulary step's probe FORM cannot render, or nil. A string is
