@@ -567,18 +567,21 @@
        :op/source [:goto (:plan/base-url plan)]}))
 
 (defn probe-runtime!
-  "Navigate to the app and evaluate `form-str` in the page that opens.
+  "Navigate to the app and evaluate `form` in the page that opens.
 
    Returns a Result of the value. There is no running app to interrogate until
    something has navigated to it, so a probe cannot be a bare eval — it needs a
-   page, and it needs the runtime pinned to that page like any other run."
-  [deps plan form-str]
+   page, and it needs the runtime pinned to that page like any other run.
+
+   `form` stays a FORM all the way to the runtime channel, which is the one
+   place it becomes source text."
+  [deps plan form]
   (let [probe (assoc plan
                      :plan/scenario :hive-cljs/probe
                      :plan/ops [(goto-op plan)
                                 {:op/kind :eval-cljs :op/channel :runtime
-                                 :op/args [form-str]
-                                 :op/source [:eval-cljs form-str]}])
+                                 :op/args [form]
+                                 :op/source [:eval-cljs form]}])
         res   (run-plan! deps probe)]
     (if (r/err? res)
       res

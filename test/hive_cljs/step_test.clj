@@ -126,7 +126,7 @@
     (is (= (str "(when-not (= :ok (:state (plato.fit/verdict-for \"welcome\")))"
                 " (throw (ex-info \"nope\" {:app/why [1 2 3 4]})))")
            (first base)))
-    (is (= "((fn [v] (= v \"pedro\")) @(re-frame.core/subscribe [:user/current]))"
+    (is (= "((fn [v] (= v \"pedro\")) (deref (re-frame.core/subscribe [:user/current])))"
            (second base)))
     (doseq [ns-maps [true false] length [nil 1] level [nil 1]
             meta? [true false] readably [true false]]

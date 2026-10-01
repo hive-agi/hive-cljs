@@ -91,8 +91,10 @@
 (defprotocol ICljsEval
   "Evaluate ClojureScript inside the running application runtime."
 
-  (eval-cljs [this build-id form-str]
-    "Evaluate form-str in build-id's runtime.
+  (eval-cljs [this build-id form]
+    "Evaluate `form` in build-id's runtime. `form` is a form or source text;
+     the adapter prints a form ONCE, under pinned printer vars
+     (`hive-cljs.dialect.source/pr-source`), at its own edge.
      Returns a Result of {:value <edn> :printed str}.")
 
   (runtime-available? [this build-id]
@@ -149,15 +151,15 @@
    first for any application and the second for none."
 
   (invariant-source [this schema frame]
-    "Source text validating the whole application state against `schema`,
+    "Form validating the whole application state against `schema`,
      yielding nil when it conforms.")
 
   (registry-source [this kinds]
-    "Source text reading the app's registered handler ids for `kinds` in ONE
+    "Form reading the app's registered handler ids for `kinds` in ONE
      round trip: `{kind [id …] …}`.")
 
   (neutralize-source [this kind id]
-    "Source text re-registering handler `id` of `kind` as a no-op."))
+    "Form re-registering handler `id` of `kind` as a no-op."))
 
 (defprotocol ISessionBound
   "Optional: a runtime channel that evaluates INSIDE the browser session the

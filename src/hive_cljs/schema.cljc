@@ -179,11 +179,18 @@
 ;; Mutation — injected behavioural faults
 ;; =============================================================================
 
+(def any-form
+  "Any authored form that is not text: a list, symbol, vector, map, number…
+   Kept apart from strings so a blank string cannot pass as a form."
+  [:fn {:error/message "should be a form"}
+   (fn [x] (and (some? x) (not (string? x))))])
+
 (def Fault
-  "One behavioural fault: source the runtime evaluates to break the live app."
+  "One behavioural fault: a form the runtime evaluates to break the live app.
+   A string is accepted as the escape hatch for reader macros EDN cannot carry."
   [:map {:closed true}
    [:fault/id :keyword]
-   [:fault/form NonBlankString]
+   [:fault/form [:or NonBlankString any-form]]
    [:fault/target {:optional true} :symbol]
    [:fault/doc {:optional true} :string]])
 

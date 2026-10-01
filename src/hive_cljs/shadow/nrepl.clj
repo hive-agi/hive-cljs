@@ -6,7 +6,8 @@
             [hive-cljs.ports :as ports]
             [hive-dsl.result :as r]
             [nrepl.core :as nrepl]
-            [hive-cljs.dialect.re-frame :as re-frame])
+            [hive-cljs.dialect.re-frame :as re-frame]
+            [hive-cljs.dialect.source :as src])
   (:import [java.io PushbackReader StringReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -24,23 +25,29 @@
     (catch Exception _ s)))
 
 (defn cljs-eval-form
-  "Wrap a user form so it is evaluated in build-id's cljs runtime from a CLJ
-   nREPL session. A non-nil runtime-id pins the eval to that runtime."
-  ([build-id form-str] (cljs-eval-form build-id form-str nil))
-  ([build-id form-str runtime-id]
-   (str "(shadow.cljs.devtools.api/cljs-eval " (pr-str (keyword (name build-id))) " "
-        (pr-str form-str) " "
-        (pr-str (if runtime-id {:runtime-id runtime-id} {})) ")")))
+  "Source text wrapping a user form so it is evaluated in build-id's cljs
+   runtime from a CLJ nREPL session. A non-nil runtime-id pins the eval to that
+   runtime. `form` may be a form or source text; either way the cljs side
+   receives it as a STRING, which is what shadow's cljs-eval takes."
+  ([build-id form] (cljs-eval-form build-id form nil))
+  ([build-id form runtime-id]
+   (src/pr-source
+    (list 'shadow.cljs.devtools.api/cljs-eval
+          (keyword (name build-id))
+          (src/form->string form)
+          (if runtime-id {:runtime-id runtime-id} {})))))
 
 (defn repl-runtimes-form
   "Source text listing the runtimes connected to build-id."
   [build-id]
-  (str "(mapv #(select-keys % [:client-id :user-agent :host])"
-       " (shadow.cljs.devtools.api/repl-runtimes " (pr-str (keyword (name build-id))) "))"))
+  (src/pr-source
+   (list 'mapv
+         (list 'fn ['r] (list 'select-keys 'r [:client-id :user-agent :host]))
+         (list 'shadow.cljs.devtools.api/repl-runtimes (keyword (name build-id))))))
 
 (def token-read-form
-  "Source text reading the page stamp `IPageMarker/mark-session!` writes."
-  "(.-__hiveCljsToken js/window)")
+  "Form reading the page stamp `IPageMarker/mark-session!` writes."
+  '(.-__hiveCljsToken js/window))
 
 (defn- collect
   "Fold nREPL response messages into {:value :printed :errors :status}."
@@ -78,10 +85,10 @@
     (r/err :cljs-eval/not-connected {})))
 
 (defn- run-cljs
-  "Evaluate form-str in build-id's runtime, optionally pinned to runtime-id.
-   Returns a Result of {:value <edn> :printed str}."
-  [conn build-id form-str runtime-id timeout-ms]
-  (let [res (eval-clj conn (cljs-eval-form build-id form-str runtime-id) timeout-ms)]
+  "Evaluate `form` (a form or source text) in build-id's runtime, optionally
+   pinned to runtime-id. Returns a Result of {:value <edn> :printed str}."
+  [conn build-id form runtime-id timeout-ms]
+  (let [res (eval-clj conn (cljs-eval-form build-id form runtime-id) timeout-ms)]
     (if (r/err? res)
       res
       (let [{:keys [value printed]} (:ok res)
@@ -115,13 +122,15 @@
 
 (defrecord ShadowNrepl [conn-atom opts]
   ports/ICljsEval
-  (eval-cljs [_ build-id form-str]
+  ;; `form` may be a form or source text: it is printed here, at the edge,
+  ;; and nowhere upstream.
+  (eval-cljs [_ build-id form]
     (let [{:keys [runtime-id] :as conn} @conn-atom]
-      (run-cljs conn build-id form-str runtime-id
+      (run-cljs conn build-id form runtime-id
                 (:timeout-ms opts default-timeout-ms))))
 
   (runtime-available? [this build-id]
-    (let [res (ports/eval-cljs this build-id "1")]
+    (let [res (ports/eval-cljs this build-id 1)]
       (and (r/ok? res) (= 1 (get-in res [:ok :value])))))
 
   ports/IRuntimeAffinity

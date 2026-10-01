@@ -32,3 +32,44 @@
    other value is printed as a form under pinned printer vars."
   [x]
   (if (string? x) x (pr-source x)))
+
+;; =============================================================================
+;; Splicing authored source text into a built form
+;; =============================================================================
+
+;; A builder composes FORMS, but an authored argument may be a string — the
+;; escape hatch for `#(…)` and `#"…"`, which have no EDN form. Printing that
+;; string as a form would quote it, so it rides inside the form as a Verbatim
+;; leaf the pinned printer writes as the text itself. The form is still printed
+;; ONCE, at the eval edge; nothing is concatenated.
+
+(deftype Verbatim [text]
+  #?@(:clj  [Object
+             (equals [_ o] (and (instance? Verbatim o) (= text (.-text ^Verbatim o))))
+             (hashCode [_] (hash text))
+             (toString [_] text)]
+      :cljs [IEquiv
+             (-equiv [_ o] (and (instance? Verbatim o) (= text (.-text o))))
+             IHash
+             (-hash [_] (hash text))
+             IPrintWithWriter
+             (-pr-writer [_ w _] (-write w text))]))
+
+#?(:clj
+   (defmethod print-method Verbatim [^Verbatim v ^java.io.Writer w]
+     (.write w ^String (.-text v))))
+
+(defn verbatim
+  "A form leaf printing as `text` exactly — authored source spliced unquoted."
+  [text]
+  (->Verbatim text))
+
+(defn verbatim?
+  [x]
+  (instance? Verbatim x))
+
+(defn arg
+  "An authored argument as a form leaf: a string becomes a Verbatim (its source
+   is spliced as written), any other value is already a form."
+  [x]
+  (if (string? x) (verbatim x) x))

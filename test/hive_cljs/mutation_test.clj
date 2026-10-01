@@ -3,6 +3,7 @@
    notices. The verdict is inverted — a green run under a fault is the failure."
   (:require [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.manifest :as manifest]
             [hive-cljs.mutation :as mutation]
             [hive-cljs.plan :as plan]
@@ -24,13 +25,65 @@
                                      :target 'app.view-model/derive-status
                                      :with "(constantly nil)"})]
     (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
-    (is (= "(set! app.view-model/derive-status (constantly nil))" (:fault/form f)))
+    (is (= "(set! app.view-model/derive-status (constantly nil))"
+           (source/form->string (:fault/form f))))
     (is (= 'app.view-model/derive-status (:fault/target f)))))
+
+(deftest a-target-and-a-replacement-FORM-become-a-set-form
+  ;; The form spelling is primary: a manifest is EDN, so `:with` can simply BE
+  ;; the replacement, and the fault stays a form until the channel prints it.
+  (let [f (mutation/normalize-fault {:id :status-hole
+                                     :target 'app.view-model/derive-status
+                                     :with '(constantly nil)})]
+    (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
+    (is (= '(set! app.view-model/derive-status (constantly nil)) (:fault/form f))
+        "built as a list, not concatenated")
+    (is (= "(set! app.view-model/derive-status (constantly nil))"
+           (source/form->string (:fault/form f))))
+    (testing "the string and form spellings of :with render the same source"
+      (is (= (source/form->string (:fault/form f))
+             (source/form->string
+              (:fault/form (mutation/normalize-fault
+                            {:id :status-hole :target 'app.view-model/derive-status
+                             :with "(constantly nil)"}))))))
+    (testing "a non-list replacement is a form too"
+      (is (= "(set! a/b nil)"
+             (source/form->string
+              (:fault/form (mutation/normalize-fault {:target 'a/b :with 'nil})))))
+      (is (= "(set! a/b false)"
+             (source/form->string
+              (:fault/form (mutation/normalize-fault {:target 'a/b :with false}))))))))
 
 (deftest raw-source-is-taken-as-authored
   (let [f (mutation/normalize-fault {:id :sub-hole :form "(reg-sub :x (fn [_ _] nil))"})]
     (is (= "(reg-sub :x (fn [_ _] nil))" (:fault/form f)))
     (is (nil? (:fault/target f)))))
+
+(deftest a-form-fault-is-taken-as-authored-and-printed-only-at-the-channel
+  (let [form '(re-frame.core/reg-sub :x (fn [_ _] nil))
+        f    (mutation/normalize-fault {:id :sub-hole :form form})]
+    (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
+    (is (= form (:fault/form f)))
+    (testing "the fault op carries the form; the stub channel prints it"
+      (let [ce (stub/cljs-eval)]
+        (is (= form (first (:op/args (mutation/fault-op f)))))
+        (boundary/perform-runtime! ce :app (mutation/fault-op f))
+        (is (= [[:app "(re-frame.core/reg-sub :x (fn [_ _] nil))"]] (stub/evals ce)))))))
+
+(deftest a-fault-form-prints-the-same-whatever-the-callers-printer-vars
+  (let [f    (mutation/normalize-fault {:target 'app/f
+                                        :with '(fn [m] (assoc m :a/x [1 2 3 4 5]))})
+        base (source/form->string (:fault/form f))]
+    (is (= "(set! app/f (fn [m] (assoc m :a/x [1 2 3 4 5])))" base))
+    (binding [*print-length* 2 *print-namespace-maps* true *print-readably* false
+              *print-meta* true *print-level* 1]
+      (is (= base (source/form->string (:fault/form f)))))))
+
+(deftest a-blank-string-is-not-a-fault-form
+  (is (nil? (mutation/normalize-fault {:id :x :form "   "})))
+  (is (nil? (mutation/normalize-fault {:target 'a/b :with ""})))
+  (is (not (m/validate s/Fault {:fault/id :x :fault/form ""})))
+  (is (m/validate s/Fault {:fault/id :x :fault/form '(do nil)})))
 
 (deftest an-id-is-derived-from-the-target-when-none-is-given
   (is (= :app.view-model.derive-status
@@ -41,6 +94,7 @@
   (is (nil? (mutation/normalize-fault {:id :empty})))
   (is (nil? (mutation/normalize-fault {:target 'a/b})))
   (is (nil? (mutation/normalize-fault {:with "(constantly nil)"})))
+  (is (nil? (mutation/normalize-fault {:with '(constantly nil)})))
   (testing "and the drop does not take the usable ones with it"
     (is (= [:good]
            (mapv :fault/id
@@ -50,10 +104,13 @@
 (deftest declared-faults-reach-the-normalized-manifest
   (let [m (:ok (manifest/parse
                 {:hive.cljs/builds {:app {:http-port 8280}}
-                 :hive.cljs/e2e    {:faults [{:id :hole :target 'a/b :with "nil"}]
+                 :hive.cljs/e2e    {:faults [{:id :hole :target 'a/b :with "nil"}
+                                             {:id :form-hole :target 'a/c
+                                              :with '(constantly nil)}]
                                     :scenarios [{:id :s :steps [[:goto "/"]]}]}}
                 "/tmp/hive-cljs-faults"))]
-    (is (= [:hole] (mapv :fault/id (get-in m [:manifest/e2e :faults]))))))
+    (is (= [:hole :form-hole] (mapv :fault/id (get-in m [:manifest/e2e :faults]))))
+    (is (= '(set! a/c (constantly nil)) (:fault/form (second (get-in m [:manifest/e2e :faults])))))))
 
 ;; =============================================================================
 ;; Injection
@@ -211,7 +268,12 @@
 
     (testing "a neutralized sub clears the reaction cache on both sides"
       (is (re-find #"clear-subscription-cache!.*reg-sub :app/items.*clear-subscription-cache!"
-                   (:fault/form (first (:ok res))))))
+                   (source/form->string (:fault/form (first (:ok res)))))))
+
+    (testing "derived faults are FORMS; only the channel stringifies them"
+      (is (every? (comp seq? :fault/form) (:ok res)))
+      (is (= '(do (re-frame.core/reg-event-db :app/load (fn [db _] db)) :neutralized)
+             (:fault/form (last (:ok res))))))
 
     (testing "every derived fault conforms"
       (is (every? #(m/validate s/Fault %) (:ok res))))))

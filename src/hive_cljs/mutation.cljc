@@ -2,13 +2,14 @@
   "PROMOTE + PIPELINE layer — behavioural mutation testing for a running app.
 
    `hive-schemas.test` mutates VALUES against schemas on the JVM; this mutates
-   BEHAVIOUR against scenarios in the browser. A fault is data: source text the
+   BEHAVIOUR against scenarios in the browser. A fault is data: a form the
    runtime channel evaluates, spliced into an ordinary `schema/RunPlan` as one
    more op, so nothing about execution changes.
 
    The verdict on a fault is inverted from an ordinary run — a suite that stays
    GREEN under a fault has a hole, and the fault survived."
   (:require [clojure.string :as str]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.schema :as s]
             [malli.core :as m]))
 
@@ -27,18 +28,31 @@
     (some? id)    (keyword (str id))
     target        (keyword (str/replace (str target) "/" "."))))
 
+(defn- blank-source?
+  [x]
+  (or (nil? x) (and (string? x) (str/blank? x))))
+
 (defn normalize-fault
   "Authored fault → `schema/Fault`, or nil when it names nothing to break.
 
-   Two spellings: `{:target sym :with \"(constantly nil)\"}` neutralizes a var,
-   `{:form \"…\"}` evaluates arbitrary source — which is what re-registering a
-   re-frame handler needs, since those live in a registry rather than a var."
+   Two spellings: `{:target sym :with (constantly nil)}` neutralizes a var,
+   `{:form (…)}` evaluates arbitrary source — which is what re-registering a
+   re-frame handler needs, since those live in a registry rather than a var.
+
+   `:with` and `:form` are FORMS; a string is still accepted as the escape
+   hatch for reader macros EDN cannot carry (`#(…)`, `#\"…\"`). Nothing is
+   printed here — the fault stays a form until the runtime channel evaluates it."
   [raw]
   (let [{:keys [target with form doc]} raw
         id   (fault-id raw)
-        src  (or form (when (and target with) (str "(set! " target " " with ")")))]
-    (when (and id (not (str/blank? (str src))))
-      (cond-> {:fault/id id :fault/form (str src)}
+        src  (cond
+               (not (blank-source? form)) form
+               ;; `:with nil` is a real replacement — break the var to nil.
+               (and target (contains? raw :with)
+                    (not (and (string? with) (str/blank? with))))
+               (list 'set! target (source/arg with)))]
+    (when (and id (some? src))
+      (cond-> {:fault/id id :fault/form src}
         target (assoc :fault/target target)
         doc    (assoc :fault/doc doc)))))
 
@@ -48,7 +62,7 @@
   (vec (keep normalize-fault raws)))
 
 (defn registry-fault
-  "One registered re-frame handler + the source that neutralizes it → a Fault.
+  "One registered re-frame handler + the form that neutralizes it → a Fault.
 
    The id is flattened (`:app/items` → `:sub-app.items`) so it stays a simple
    keyword: a fault id names a fault, not a namespace in the app."
@@ -59,7 +73,7 @@
    :fault/doc  (str "neutralized re-frame " (name kind) " " id)})
 
 (defn fault-op
-  "The op that applies a fault: plain source on the runtime channel."
+  "The op that applies a fault: its form, evaluated on the runtime channel."
   [fault]
   (let [src (:fault/form fault)]
     {:op/kind    :eval-cljs
@@ -217,12 +231,12 @@
        :fault/status :unapplied
        :fault/detail (str "the fault was never applied on the app page in any "
                           "scenario, so the suite was not challenged by "
-                          (:fault/form fault))}
+                          (source/form->string (:fault/form fault)))}
 
       :else
       {:fault/id (:fault/id fault) :fault/killed? false
        :fault/status :survived
-       :fault/detail (str "no scenario noticed " (:fault/form fault)
+       :fault/detail (str "no scenario noticed " (source/form->string (:fault/form fault))
                           " — the suite is blind to this behaviour")})))
 
 (defn- unapplied? [v] (= :unapplied (:fault/status v)))

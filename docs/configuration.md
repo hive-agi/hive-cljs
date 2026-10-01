@@ -235,7 +235,7 @@ verdict between file writes.
  :app-db-check   :every-step              ; :every-step | :mutations | :final
  :faults         [{:id     :status-hole   ; optional — the mutation catalog
                    :target my.app.view-model/derive-status
-                   :with   "(constantly nil)"}]
+                   :with   (constantly nil)}]  ; a form; a string still works
  :scenarios      [{:id    :login          ; required
                    :build :app            ; optional — inherited if unambiguous
                    :tags  [:smoke]        ; optional — selects for `e2e run` / watch
@@ -338,10 +338,19 @@ assertions. See [steps.md](steps.md#the-app-db-invariant-channel).
 
 #### `:faults` — the mutation catalog
 
-Each entry is `{:id :target :with}` (replace a var) or `{:id :form "…"}`
-(evaluate arbitrary source). `cljs e2e mutate` injects each one and reports the
-ones no scenario turned red. `:auto` derives a catalog from the app's own
-re-frame registries with no config at all.
+Each entry is `{:id :target :with}` (replace a var) or `{:id :form …}`
+(evaluate arbitrary source). `:with` and `:form` are forms, written as EDN:
+
+```clojure
+:faults [{:id :status-hole :target my.app.view-model/derive-status :with (constantly nil)}
+         {:id :items-hole  :form (re-frame.core/reg-sub :app/items (fn [_ _] []))}
+         ;; a string is the escape hatch for reader macros EDN cannot carry
+         {:id :count-hole  :target my.app/count-items :with "#(- (count %) 1)"}]
+```
+
+`cljs e2e mutate` injects each one and reports the ones no scenario turned
+red. `:auto` derives a catalog from the app's own re-frame registries with no
+config at all.
 
 ### `:hive.cljs/watch` — build → e2e coupling
 

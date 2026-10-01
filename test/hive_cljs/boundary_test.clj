@@ -5,8 +5,10 @@
    Both ports are stubs — the test names no vendor."
   (:require [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.fixtures :as fix]
             [hive-cljs.plan :as plan]
+            [hive-cljs.ports :as ports]
             [hive-cljs.stub.ports :as stub]
             [hive-cljs.verdict :as verdict]
             [hive-dsl.result :as r]))
@@ -34,7 +36,7 @@
     (testing "the runtime assertion reached ICljsEval as a subscription deref"
       (let [[[build form]] (stub/evals (:cljs-eval d))]
         (is (= :app build))
-        (is (= "(some? @(re-frame.core/subscribe [:current-user]))" form))))
+        (is (= "(some? (deref (re-frame.core/subscribe [:current-user])))" form))))
     (testing "the session was opened and closed exactly once"
       (is (= 1 (stub/sessions-opened (:driver d))))
       (is (= 1 (stub/sessions-closed (:driver d)))))))
@@ -139,3 +141,40 @@
   (let [p (:ok (plan/plan-for-id fix/manifest :dashboard))]
     (is (not (plan/needs-runtime? p)))
     (is (verdict/run-ok? (:ok (boundary/run-plan! (deps) p))))))
+
+;; =============================================================================
+;; Forms cross into source only inside the channel adapter
+;; =============================================================================
+
+(deftest a-probe-carries-a-FORM-to-the-channel-which-prints-it
+  (let [ce   (stub/cljs-eval (fn [_ form] (when (re-find #"kind->id->handler" form)
+                                            {:sub [:a/b]})))
+        d    {:driver (stub/driver) :cljs-eval ce}
+        plan {:plan/scenario :s :plan/build :app :plan/base-url "http://localhost:8280"
+              :plan/ops [{:op/kind :goto :op/channel :browser :op/args ["http://localhost:8280/"]
+                          :op/source [:goto "/"]}]}
+        form (ports/registry-source ce [:sub])
+        res  (boundary/probe-runtime! d plan form)]
+    (testing "the introspection port hands out a form, not text"
+      (is (map? form))
+      (is (= '(vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub)))
+             (get form :sub))))
+    (is (r/ok? res) (pr-str res))
+    (is (= {:sub [:a/b]} (:ok res)))
+    (testing "the channel received pinned source, the same under any printer vars"
+      (let [[[_ sent]] (stub/evals ce)]
+        (is (= "{:sub (vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub)))}" sent))
+        (binding [*print-length* 1 *print-level* 1 *print-readably* false]
+          (is (= sent (source/pr-source form))))))))
+
+(deftest derived-faults-stay-forms-until-the-channel
+  (let [ce  (stub/cljs-eval (fn [_ form] (when (re-find #"kind->id->handler" form)
+                                           {:sub [:a/b] :event [:a/go]})))
+        d   {:driver (stub/driver) :cljs-eval ce}
+        res (boundary/derive-faults!
+             d {:plan/scenario :s :plan/build :app :plan/base-url "http://localhost:8280"
+                :plan/ops []}
+             [:sub :event])]
+    (is (r/ok? res) (pr-str res))
+    (is (every? (comp seq? :fault/form) (:ok res)))
+    (is (= (ports/neutralize-source ce :event :a/go) (:fault/form (last (:ok res)))))))

@@ -14,6 +14,7 @@
             [hive-cljs.dialect.re-frame :as re-frame]
             [hive-cljs.dialect.source :as source]
             [hive-cljs.ports :as ports]
+            [hive-cljs.shadow.nrepl :as nrepl]
             [hive-cljs.stub.ports :as stub]
             [hive-dsl.result :as r]))
 
@@ -29,9 +30,9 @@
 ;; =============================================================================
 
 (deftest the-re-frame-dialect-renders-the-step-vocabulary
-  (is (= "(some? @(re-frame.core/subscribe [:user]))"
+  (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
          (re-frame/assertion-source (op :expect-sub [:user] "some?"))))
-  (is (= "(some? (get-in @re-frame.db/app-db [:user]))"
+  (is (= "(some? (get-in (deref re-frame.db/app-db) [:user]))"
          (re-frame/assertion-source (op :expect-db [:user] "some?"))))
   (is (= "(do (re-frame.core/dispatch-sync [:go]) :dispatched)"
          (re-frame/assertion-source (op :dispatch [:go]))))
@@ -48,12 +49,12 @@
     (is (= "(+ 1 2)" (re-frame/assertion-source (op :eval-cljs '(+ 1 2))))))
 
   (testing "a predicate reads as a symbol or a fn form, not only as text"
-    (is (= "(some? @(re-frame.core/subscribe [:user]))"
+    (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
            (re-frame/assertion-source (op :expect-sub [:user] 'some?))))
-    (is (= "((fn [v] (= v \"pedro\")) (get-in @re-frame.db/app-db [:user :name]))"
+    (is (= "((fn [v] (= v \"pedro\")) (get-in (deref re-frame.db/app-db) [:user :name]))"
            (re-frame/assertion-source
             (op :expect-db [:user :name] '(fn [v] (= v "pedro"))))))
-    (is (= "(let [v @(re-frame.core/subscribe [:x])] [(boolean (seq v)) v])"
+    (is (= "(let [v (deref (re-frame.core/subscribe [:x]))] [(boolean (seq v)) v])"
            (re-frame/probe-source (op :wait-for-sub [:x] 'seq)))))
 
   (testing "and the string spelling still works, because #(…) and #\"…\" have no
@@ -110,7 +111,7 @@
   (doseq [b printer-bindings]
     (with-bindings b
       (is (= "#(= % \"pedro\")" (source/form->string "#(= % \"pedro\")")))
-      (is (= "(#(> (count %) 3) @(re-frame.core/subscribe [:items]))"
+      (is (= "(#(> (count %) 3) (deref (re-frame.core/subscribe [:items])))"
              (re-frame/assertion-source (op :expect-sub [:items] "#(> (count %) 3)")))))))
 
 (deftest the-js-dialect-also-pins-the-printer
@@ -143,7 +144,7 @@
   ;; 'never happened' and 'not yet' need different fixes, so the polled form
   ;; yields the value alongside the predicate result.
   (let [src (re-frame/probe-source (op :wait-for-sub [:user] "some?"))]
-    (is (str/includes? src "@(re-frame.core/subscribe [:user])"))
+    (is (str/includes? src "(deref (re-frame.core/subscribe [:user]))"))
     (is (str/includes? src "[(boolean"))))
 
 ;; =============================================================================
@@ -154,9 +155,65 @@
   (let [ce (stub/cljs-eval)]
     (is (ports/runtime-dialect? ce))
     (is (ports/runtime-introspection? ce))
-    (is (= "(some? @(re-frame.core/subscribe [:user]))"
+    (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
            (ports/assertion-source ce (op :expect-sub [:user] "some?")))
         "the channel renders through the same dialect, not one of its own")))
+
+;; =============================================================================
+;; Builders return forms; text appears once, at the edge
+;; =============================================================================
+
+(deftest the-re-frame-builders-return-forms-not-text
+  (is (= '(deref (re-frame.core/subscribe [:user])) (re-frame/sub-form [:user])))
+  (is (= '(re-frame.core/with-frame :f (deref (re-frame.core/subscribe [:user])))
+         (re-frame/sub-form [:user] :f)))
+  (is (= '(deref re-frame.db/app-db) (re-frame/db-root-form)))
+  (is (= '(re-frame.core/app-db-value :f) (re-frame/db-root-form :f)))
+  (is (= '(get-in (deref re-frame.db/app-db) [:a]) (re-frame/db-form [:a])))
+  (is (= '(do (re-frame.core/with-frame :f (re-frame.core/dispatch-sync [:go])) :dispatched)
+         (re-frame/dispatch-form [:go] :f)))
+  (is (= '(let [v x] [(boolean (seq v)) v]) (re-frame/probe-call 'seq 'x)))
+  (is (= '(when-let [e (malli.core/explain app/db (deref re-frame.db/app-db))]
+            (mapv (fn [x] {:path (vec (:in x)) :value (:value x)}) (:errors e)))
+         (re-frame/app-db-invariant-form 'app/db (re-frame/db-root-form))))
+  (is (= {:sub   '(vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub)))
+          :event '(vec (keys (get (deref re-frame.registrar/kind->id->handler) :event)))}
+         (re-frame/registry-map-form [:sub :event])))
+  (is (= '(do (re-frame.core/clear-subscription-cache!)
+              (re-frame.core/reg-sub :a/b (fn [_ _] nil))
+              (re-frame.core/clear-subscription-cache!)
+              :neutralized)
+         (re-frame/neutralize-form :sub :a/b)))
+  (is (= '(js->clj (js/eval "1 + 1")) (re-frame/js-form "1 + 1"))
+      "the JavaScript stays a string: it is the JS dialect's output"))
+
+(deftest a-frame-pinned-step-renders-as-readable-source
+  (is (= '(some? (re-frame.core/with-frame :f (deref (re-frame.core/subscribe [:u]))))
+         (read-string (re-frame/assertion-source
+                       (assoc (op :expect-sub [:u] 'some?) :op/frame :f))))))
+
+(deftest every-new-edge-pins-the-printer
+  (let [edges {:invariant  #(source/pr-source (re-frame/app-db-invariant-form
+                                               'app/db (re-frame/db-root-form :f/x)))
+               :registry   #(source/pr-source (re-frame/registry-map-form [:sub :event]))
+               :neutralize #(source/pr-source (re-frame/neutralize-form :event :a/b))
+               :dispatch   #(re-frame/assertion-source
+                             (assoc (op :dispatch [:a/go {:a/x [1 2 3 4]}]) :op/frame :f))
+               :probe      #(re-frame/probe-source (op :wait-for-db [:a :b :c] 'seq))
+               :js         #(re-frame/assertion-source (op :eval-js "x"))
+               :cljs-eval  #(nrepl/cljs-eval-form :app '(+ 1 2 3 4) "rt-1")
+               :runtimes   #(nrepl/repl-runtimes-form :app)
+               :token      #(source/pr-source nrepl/token-read-form)}
+        baseline (update-vals edges #(%))]
+    (is (= "(shadow.cljs.devtools.api/cljs-eval :app \"(+ 1 2 3 4)\" {:runtime-id \"rt-1\"})"
+           (:cljs-eval baseline)))
+    (is (= "(.-__hiveCljsToken js/window)" (:token baseline)))
+    (is (= "{:sub (vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub))), :event (vec (keys (get (deref re-frame.registrar/kind->id->handler) :event)))}"
+           (:registry baseline)))
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= baseline (update-vals edges #(%)))
+            (str "an edge changed under " (pr-str (update-keys b #(.sym ^clojure.lang.Var %)))))))))
 
 ;; =============================================================================
 ;; Degradation
