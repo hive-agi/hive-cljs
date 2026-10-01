@@ -210,6 +210,24 @@
     "Release a runtime channel this toolchain opened. Idempotent; never throws."))
 
 ;; =============================================================================
+;; IFileStamps / IClock — what an artifact observer samples
+;; =============================================================================
+
+(defprotocol IFileStamps
+  "Read filesystem facts. The seam an artifact observer samples through, so
+   the decision over them is testable against a filesystem that is a map."
+
+  (file-stamps [this root paths opts]
+    "Return `{path {:modified :size :hash?}}` for every regular file at or under
+     each of `paths` (relative to `root`), keyed by its root-relative path. A
+     path that does not exist contributes nothing. `opts` may carry
+     `:hash? true` to add a content `:hash`. Never throws."))
+
+(defprotocol IClock
+  "Read the time."
+  (now-ms [this] "Current time in epoch millis."))
+
+;; =============================================================================
 ;; IFitSource — where fit measurements come from
 ;; =============================================================================
 
@@ -271,6 +289,8 @@
 (defn page-bootstrap? [x] (satisfies? IPageBootstrap x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))
+(defn file-stamps? [x] (satisfies? IFileStamps x))
+(defn clock? [x] (satisfies? IClock x))
 
 (defn fit-source? [x] (satisfies? IFitSource x))
 (defn fit-universe? [x] (satisfies? IFitUniverse x))

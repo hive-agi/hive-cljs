@@ -206,10 +206,49 @@ compile.
 Declare no `:command` and the toolchain reports `:build-tool/not-supervised` —
 scenarios still run, `cljs status` and `cljs compile` do not.
 
-One real limit: this channel only sees compiles **it** ran, so `cljs watch`
-couples to hive-driven builds and not to an external `vite --watch`. It is
-reported that way rather than papered over with a poller that would invent a
-verdict between file writes.
+#### `:artifacts` — observing a build something else runs
+
+A `:command` only reports compiles that **hive** ran. When an external
+`vite --watch`, `elm-live` or `tsc --watch` is already running, declare the
+output it writes and hive observes that instead:
+
+```clojure
+{:hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 5173
+                          :artifacts ["dist"]}}}          ; shorthand for {:outputs ["dist"]}
+
+;; or, in full
+{:app {:artifacts {:outputs      ["dist" "public/app.js"] ; files or dirs, root-relative
+                   :ready-marker ".hive-built"   ; optional: a file the tool touches when done
+                   :quiet-ms     300             ; output must hold still this long (default 300)
+                   :poll-ms      250             ; sampling period (default 250)
+                   :hash?        false}}}        ; compare content hashes, not just mtime+size
+```
+
+While `cljs watch` is running, the declared output is sampled, and a change
+emits the same `BuildEvent` (`:completed`, with the changed files under
+`:build/files`) a hive-driven compile emits — so `:on-build-success` actions
+fire for external compiles too. The rules:
+
+- the first sample is a **baseline**: output already on disk when watching
+  starts is never reported;
+- a change is reported only after it has held still for `:quiet-ms`, so a
+  bundler writing many files is one event and never a half-written bundle;
+- with `:ready-marker` only the marker is watched and its change is reported
+  at once — the tool itself said it was done;
+- output that vanished entirely (vite empties `outDir` first) is a build in
+  progress, not an event;
+- `:hash? true` ignores a touch that changed no bytes;
+- a compile hive runs itself (`cljs compile`) is reported from its exit code,
+  and the output it wrote is not reported a second time.
+
+What this cannot see is an external compile that **failed**: such a tool
+usually writes nothing, so there is no event rather than a red one. A build
+may declare both `:command` and `:artifacts`; one declaring only `:artifacts`
+is observed, and `cljs compile` on it answers `:build/no-command`.
+
+Sampling is not a timer verdict: an event fires only when the artifact under
+test changed. A build declaring neither key reports `:build-tool/not-supervised`.
 
 ### `:hive.cljs/e2e` — browser and scenarios
 

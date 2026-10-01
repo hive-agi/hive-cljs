@@ -26,6 +26,8 @@ ADAPTERS   shadow/toolchain → IToolchain           (:shadow-cljs)
              └ shadow/nrepl → ICljsEval + IRuntimeDialect + IRuntimeIntrospection
            browser/toolchain → IToolchain          (:browser — every other stack)
              ├ build/process   → IBuildTool        (argv + exit code)
+             │  └ build/observe → samples :artifacts via IFileStamps + IClock;
+             │                    build/artifacts (pure) decides a compile happened
              └ browser/page-eval → ICljsEval + IRuntimeDialect + ISessionBound
            browser/playwright → IBrowserDriver + IPageMarker + IPageEval
 ```
@@ -223,6 +225,13 @@ arrives as an argument (`{:build-tool … :driver … :cljs-eval …}`).
 
 **`watch`** decides; `watch/supervisor` executes. Debounce is *decided* purely
 from timestamps; only sleeping, subscribing and running live in the supervisor.
+
+**`build/artifacts`** decides, from filesystem stamps and a clock reading, when
+a build hive did not run has finished emitting output (baseline first sample,
+quiet window, optional ready-marker); `build/observe` only samples through the
+`IFileStamps` / `IClock` ports and emits the resulting `BuildEvent` through the
+process build tool's subscribers — so an external `vite --watch` drives
+`cljs watch` exactly like a hive-driven compile.
 
 ## Testing
 

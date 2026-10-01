@@ -232,13 +232,27 @@
 ;; Manifest — normalized
 ;; =============================================================================
 
+(def ArtifactSpec
+  "Where a build nobody here ran leaves its output, so its compiles can be
+   observed: `:outputs` are files or directories (relative to the project root)
+   whose change witnesses a compile; a `:ready-marker` is one file the tool
+   touches when it has finished, and when declared it alone is watched."
+  [:map {:closed true}
+   [:outputs {:optional true} [:vector NonBlankString]]
+   [:ready-marker {:optional true} NonBlankString]
+   [:quiet-ms {:optional true} Millis]
+   [:poll-ms {:optional true} [:int {:min 1}]]
+   [:hash? {:optional true} :boolean]])
+
 (def BuildSpec
   [:map {:closed true}
    [:shadow/id BuildId]
    [:http-port {:optional true} Port]
    [:entry {:optional true} NonBlankString]
    ;; argv for a toolchain whose build is a command rather than a server
-   [:command {:optional true} [:vector NonBlankString]]])
+   [:command {:optional true} [:vector NonBlankString]]
+   ;; output observed for compiles an external watcher runs
+   [:artifacts {:optional true} ArtifactSpec]])
 
 (def E2eConfig
   [:map {:closed true}
