@@ -41,6 +41,12 @@ merge is one level deep and the dedicated file wins key by key, so `:host` and
 in the same step vector. Red on one and green on the other localises a bug to
 rendering rather than state.
 
+**Steps as data.** Selectors are keywords (`:#go` compiles to `#go`) and the
+`:expect-sub` / `:expect-db` predicates are forms (`(fn [u] (= u "pedro"))`),
+so a malformed one fails the plan before a browser opens. A string still works
+in either place, as the
+[escape hatch](../docs/steps.md#strings-are-the-escape-hatch).
+
 **The input vocabulary.** `:inputs` exercises `:fill`, `:select`, `:check`,
 `:hover`, `:press` and `:expect-value` against a controlled re-frame form, so a
 keystroke that never reaches the renderer shows up as a failed `:expect-value`

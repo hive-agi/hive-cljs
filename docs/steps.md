@@ -20,9 +20,9 @@ in that document instead: see
 
 ## Selectors are data
 
-Every step argument named "selector" below (and `:expect-fits`) takes either a
-CSS/Playwright **string**, passed through untouched, or **selector data** that
-`hive-cljs.selector` compiles while the step compiles:
+Every step argument named "selector" below (and `:expect-fits`, the `:iframe`
+option, and the selector arguments of the `dom/` probe functions) is **selector
+data**, which `hive-cljs.selector` compiles while the step compiles:
 
 | Data | Compiles to |
 |---|---|
@@ -35,8 +35,13 @@ CSS/Playwright **string**, passed through untouched, or **selector data** that
 | `[:li {:has :button.del :not :.done}]` | `li:has(button.del):not(.done)` |
 
 `:has-text`, `:text-is` and `:visible` are Playwright pseudo-classes. They are
-refused in `:expect-fits`, because that step runs the page's own
+refused in `:expect-fits` and in the `dom/` functions of a
+[probe form](#probe-forms), because those run the page's own
 `querySelectorAll`.
+
+`:iframe` takes selector data as well, on the e2e config or on one scenario:
+`:iframe [:in :hyperframes-player :iframe]`. See
+[configuration.md](configuration.md#iframe-when-the-application-under-test-is-a-child-document).
 
 Helpers return data, so they compose: `testid`, `testid-prefix`, `role`,
 `within`, `child-of`, `any-of`, `with-text`. `defselector` names a selector
@@ -52,6 +57,26 @@ A malformed selector (`[:li :a :b]`, `{}`, `42`) is a `:selector/malformed`
 error when the plan compiles, and carries `:problem`. It never reaches the
 browser, so it cannot turn into a timeout.
 
+## Strings are the escape hatch
+
+Selectors, probes and predicates are written as Clojure data throughout this
+reference. A string is still accepted everywhere one of them is, and is passed
+through **verbatim**: a selector string goes to Playwright as written, a
+`:*-js` / `:*-state` string is JavaScript, an `:eval-cljs` / `:expect-sub` /
+`:expect-db` string is ClojureScript source.
+
+Reach for a string only when the data cannot say it:
+
+- a Playwright engine the selector data has no form for (`"text=Sign in"`,
+  `"role=button[name=\"OK\"]"`, `>>` chains);
+- JavaScript the probe language does not cover (statements, `new`, `await`,
+  operators it has no head for);
+- a ClojureScript reader macro EDN cannot carry, such as a regex `#"^p"`.
+
+A string is not checked at plan time, so a typo in one surfaces in the page,
+not when the plan compiles. That is the price, and the reason it is not the
+default.
+
 ## Browser steps
 
 ### Navigation
@@ -66,30 +91,30 @@ browser, so it cannot turn into a timeout.
 
 | Step | Does |
 |---|---|
-| `[:click "#go"]` | click a selector |
-| `[:fill "#user" "pedro"]` | set an input's value |
-| `[:select "#country" "BR"]` | choose an option |
-| `[:check "#agree"]` | check a checkbox |
-| `[:press "#user" "Enter"]` | press a key on an element |
-| `[:hover "#menu"]` | hover |
+| `[:click :#go]` | click a selector |
+| `[:fill :#user "pedro"]` | set an input's value |
+| `[:select :#country "BR"]` | choose an option |
+| `[:check :#agree]` | check a checkbox |
+| `[:press :#user "Enter"]` | press a key on an element |
+| `[:hover :#menu]` | hover |
 
 ### Synchronisation
 
 | Step | Does |
 |---|---|
-| `[:wait-for "#chart"]` | wait for a selector to appear |
+| `[:wait-for :#chart]` | wait for a selector to appear |
 | `[:wait-ms 250]` | fixed pause — a last resort |
 
 ### DOM assertions
 
 | Step | Passes when |
 |---|---|
-| `[:expect-text "#hi" "Hello"]` | element's text CONTAINS the expected string |
-| `[:expect-value "#user" "pedro"]` | input's value equals exactly |
-| `[:expect-visible "#chart"]` | element is visible |
-| `[:expect-hidden "#hi"]` | element is absent or hidden |
-| `[:expect-count ".row" 3]` | selector matches exactly N elements |
-| `[:expect-attr "#menu" "aria-expanded" "true"]` | attribute equals exactly |
+| `[:expect-text :#hi "Hello"]` | element's text CONTAINS the expected string |
+| `[:expect-value :#user "pedro"]` | input's value equals exactly |
+| `[:expect-visible :#chart]` | element is visible |
+| `[:expect-hidden :#hi]` | element is absent or hidden |
+| `[:expect-count :.row 3]` | selector matches exactly N elements |
+| `[:expect-attr :#menu "aria-expanded" "true"]` | attribute equals exactly |
 | `[:expect-url "/dashboard"]` | current URL CONTAINS the expected string |
 
 `:expect-attr` distinguishes an **absent** attribute from one holding the wrong
@@ -134,16 +159,16 @@ inherited when the project has one build).
 |---|---|
 | `[:eval-cljs (+ 1 2)]` | the form; passes if it returns without error |
 | `[:dispatch [:login "pedro"]]` | `(re-frame.core/dispatch-sync [:login "pedro"])` |
-| `[:expect-sub [:current-user] "some?"]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
-| `[:expect-db [:user :name] "some?"]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
-| `[:wait-for-sub [:selected] "some?"]` | the same, polled until it holds |
-| `[:wait-for-db [:items] "seq"]` | the same, polled until it holds |
+| `[:expect-sub [:current-user] some?]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
+| `[:expect-db [:user :name] some?]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
+| `[:wait-for-sub [:selected] some?]` | the same, polled until it holds |
+| `[:wait-for-db [:items] seq]` | the same, polled until it holds |
 
-#### A form is the preferred spelling; a string is the escape hatch
+#### Arguments are forms
 
-The manifest is EDN, so a step argument can simply **be** the form. Prefer that:
-a source string costs escaping, editor support, linting and indexing, and a typo
-inside one ships as a runtime error rather than failing to read.
+The manifest is EDN, so a step argument simply **is** the form. A source string
+would cost escaping, editor support, linting and indexing, and a typo inside one
+ships as a runtime error rather than failing to read.
 
 ```clojure
 [:eval-cljs (my.app/reset!)]                       ; a form
@@ -151,10 +176,11 @@ inside one ships as a runtime error rather than failing to read.
 [:expect-db [:user :name] (fn [v] (= v "pedro"))]  ; a fn form
 ```
 
-Strings keep working, and stay the right answer for the two things EDN cannot
-represent: `"#(= % \"pedro\")"` and `"#\"^p\""`. Everything else reads better as
-data, which is why `:dispatch` has always taken `[:login "pedro"]` rather than
-text.
+EDN has no `#(…)` or `#"…"` reader macros, so write `(fn [u] (= u "pedro"))`
+rather than `#(= % "pedro")`. A regex has no EDN spelling at all; that is one
+of the few places a string is still needed (see
+[Strings are the escape hatch](#strings-are-the-escape-hatch)). `:dispatch` has
+always taken `[:login "pedro"]` rather than text for the same reason.
 
 A form is printed with `pr-str` under **pinned** printer vars
 (`*print-namespace-maps*` false, `*print-length*` and `*print-level*` nil,
@@ -163,8 +189,8 @@ the same whatever bindings the calling thread carries: a REPL with
 `*print-length*` set cannot truncate `[1 2 3 4]` into `[1 2 ...]`, and
 `{:user/id 1}` never arrives as `#:user{:id 1}`. A string is sent verbatim.
 
-The predicate is rendered as source either way, so any expression works:
-`some?`, `string?`, `"#(> (count %) 3)"`.
+The predicate is applied to the value, so any one-argument function works:
+`some?`, `string?`, `(fn [xs] (> (count xs) 3))`.
 
 `:expect-sub` and `:expect-db` are **assertions** — a `false` or `nil` result
 fails the step. `:eval-cljs` and `:dispatch` are **actions** — they pass unless
@@ -178,9 +204,12 @@ runtime to configure and no `:nrepl-port` to set.
 
 | Step | Evaluates |
 |---|---|
-| `[:eval-js "window.app.reset()"]` | the expression; passes unless it throws |
-| `[:expect-js "document.title === 'Inbox'"]` | the expression as an assertion |
-| `[:wait-for-js "window.store.getState().ready"]` | the same, polled until it holds |
+| `[:eval-js (.reset js/window.app)]` | the expression; passes unless it throws |
+| `[:expect-js (= js/document.title "Inbox")]` | the expression as an assertion |
+| `[:wait-for-js (.-ready (.getState js/window.store))]` | the same, polled until it holds |
+
+The argument is a **probe form**, rendered to one JavaScript expression; see
+[Probe forms](#probe-forms) below for what it may contain.
 
 `:expect-js` uses **JavaScript** truthiness, so `0`, `""`, `null`, `undefined`
 and `NaN` all fail the step. A passing assertion reports the value it saw rather
@@ -191,9 +220,9 @@ come first — otherwise there is no application to ask:
 
 ```clojure
 [[:goto "/"]
- [:click "#load"]
- [:wait-for-js "window.__elmModel.items.length > 0"]
- [:expect-js "document.querySelectorAll('.item').length === 3"]]
+ [:click :#load]
+ [:wait-for-js (> (count (.-items js/window.__elmModel)) 0)]
+ [:expect-js (= 3 (dom/count :.item))]]
 ```
 
 How an app exposes its state to that first expression is the app's business: an
@@ -201,16 +230,16 @@ Elm port writing to `window`, a Redux store, a Svelte store, a signal. Nothing
 here reaches into a framework's internals — which is exactly why it works for
 all of them.
 
-#### A probe form instead of a JavaScript string
+#### Probe forms
 
 The argument to `:eval-js`, `:expect-js` and `:wait-for-js` (and the predicate
-of `:expect-state` / `:wait-for-state`) may be a **form** instead of a string.
+of `:expect-state` / `:wait-for-state`) is a **form**.
 `hive-cljs.dialect.probe` renders it to one JavaScript expression, so a manifest
-need not carry JS blobs:
+carries no JS blobs:
 
 ```clojure
-[:wait-for-js (= 1 (dom/count "#welcome .fragment.visible"))]
-[:expect-js   (every? dom/visible? (dom/all "#main [data-composition-id]"))]
+[:wait-for-js (= 1 (dom/count [:in :#welcome :.fragment.visible]))]
+[:expect-js   (every? dom/visible? (dom/all [:in :#main {:data-composition-id true}]))]
 [:expect-js   (>= (count (keys (.-__timelines js/window))) 16)]
 [:expect-js   (let [tl (get (.-__timelines js/window) "animation")]
                 (.seek tl 3)
@@ -232,6 +261,11 @@ equal; compare `(str/join "," xs)` instead) and truthiness is JS truthiness.
 unbound symbol fails the **plan** with `:step/malformed`, before a browser opens,
 rather than reaching the page as a `ReferenceError`. A string is still accepted
 verbatim, as the escape hatch for anything the forms cannot say.
+
+Every selector argument of a `dom/` function is [selector data](#selectors-are-data)
+too, compiled while the plan compiles. Because the page itself runs it with
+`querySelector`, it is compiled as plain CSS: the Playwright-only `:has-text`,
+`:text-is` and `:visible` are refused there, exactly as in `:expect-fits`.
 
 Combined with `:iframe`, `document` is already the child document, so a probe
 needs no prelude to find it.
@@ -260,13 +294,14 @@ run at read time, once per assertion.
 
 | Step | Reads |
 |---|---|
-| `[:expect-state ["model" "user" "name"] "v !== null"]` | `window.__hive__.read(["model","user","name"])` |
-| `[:wait-for-state ["model" "loading"] "v === false"]` | the same, polled until it holds |
+| `[:expect-state ["model" "user" "name"] (some? v)]` | `window.__hive__.read(["model","user","name"])` |
+| `[:wait-for-state ["model" "loading"] (= v false)]` | the same, polled until it holds |
 
 The first path segment names the exposed source; the rest indexes into it, and
-integer segments index arrays (`["model" "items" 0 "id"]`). `v` in the predicate
-is the value that was read, and a passing assertion reports that value rather
-than a bare `true`.
+integer segments index arrays (`["model" "items" 0 "id"]`). The predicate is a
+[probe form](#probe-forms): `v` in it is the value that was read, and a function
+such as `some?` or `(fn [x] (> x 2))` is applied to that value. A passing assertion reports that value rather than
+a bare `true`.
 
 This is the counterpart of `:expect-sub` for stacks that are not re-frame — same
 shape, same debugging property: `:expect-text` red while `:expect-state` green
@@ -301,14 +336,14 @@ than an expression each manifest re-authors:
 
 ```clojure
 [[:goto "/certificado"]
- [:wait-for "main"]
- [:expect-fits "main"]
- [:expect-fits "h1"]]
+ [:wait-for :main]
+ [:expect-fits :main]
+ [:expect-fits :h1]]
 ```
 
 | Step | Passes when |
 |---|---|
-| `[:expect-fits "main"]` | every element the selector matches stays inside its box |
+| `[:expect-fits :main]` | every element the selector matches stays inside its box |
 
 Two questions, because an element can overflow in two directions and only one of
 them shows up in a scroll size. It must sit inside the **viewport**
@@ -329,7 +364,7 @@ Three answers, and the third is the point:
 | something overflows | `false`, which fails the step |
 | nothing was measurable | throws: the selector matched nothing, or matched only elements with no rectangle |
 
-That last row is why this is not `[:expect-js "…querySelectorAll…"]` with a
+That last row is why this is not `[:expect-js (dom/count …)]` with a
 count of zero: a gate that could not look must never read as a gate that looked
 and was happy.
 
@@ -337,23 +372,23 @@ Pair it with a per-scenario `:viewport` to ask the same question at several
 widths; the selector is then the only thing that varies:
 
 ```clojure
-{:id :phone   :viewport {:width 390 :height 844}  :steps [[:goto "/"] [:expect-fits "main"]]}
-{:id :desktop :viewport {:width 1440 :height 900} :steps [[:goto "/"] [:expect-fits "main"]]}
+{:id :phone   :viewport {:width 390 :height 844}  :steps [[:goto "/"] [:expect-fits :main]]}
+{:id :desktop :viewport {:width 1440 :height 900} :steps [[:goto "/"] [:expect-fits :main]]}
 ```
 
 ### Condition-waits on state
 
 `:wait-for` waits on the DOM; `:wait-for-sub` and `:wait-for-db` wait on what the
-app *believes*. They take the same predicate strings as the matching `:expect-*`,
+app *believes*. They take the same predicate forms as the matching `:expect-*`,
 poll every `:poll-ms` (default 250) until `:timeout-ms`, and pass the moment the
 predicate holds.
 
 Reach for one whenever an assertion follows an async mutation:
 
 ```clojure
-[:click "#save"]
-[:wait-for-sub [:selected] "some?"]        ; not [:wait-ms 2500]
-[:expect-sub [:selected] "#(= \"active\" (:status %))"]
+[:click :#save]
+[:wait-for-sub [:selected] some?]        ; not [:wait-ms 2500]
+[:expect-sub [:selected] (fn [s] (= "active" (:status s)))]
 ```
 
 A fixed pause is a guess about a machine you are not running on: it passes warm
@@ -426,7 +461,7 @@ not be yours.
 Arity and shape are checked while compiling, before a browser opens:
 
 ```clojure
-[:fill "#a"]      ; => :step/malformed {:expected-arity 2 :got-arity 1 :index 2}
+[:fill :#a]       ; => :step/malformed {:expected-arity 2 :got-arity 1 :index 2}
 [:teleport "/x"]  ; => :step/unknown-kind {:known [:goto :back … ]}
 ["goto" "/x"]     ; => :step/no-kind
 [:click [:li :a :b]] ; => :selector/malformed {:problem "…at most one child…"}
@@ -443,10 +478,16 @@ no edit to existing code, and an earlier rule can shadow a built-in one.
   (reify step/IStepRule
     (rule-id   [_] :swipe)
     (applies?  [_ st] (= :swipe (first st)))
-    (compile-op [_ st] (r/ok {:op/kind :swipe :op/channel :browser
-                              :op/args (vec (rest st)) :op/source (vec st)}))))
+    (compile-op [_ [_ target dir :as st]]
+      ;; compile the selector datum here, as the built-in kinds do, so the
+      ;; adapter only ever sees a string
+      (let [res (sel/compile-selector target)]
+        (if (r/ok? res)
+          (r/ok {:op/kind :swipe :op/channel :browser
+                 :op/args [(:ok res) dir] :op/source (vec st)})
+          res)))))
 
-(step/compile-step (conj step/default-rules swipe) [:swipe "#a" :left])
+(step/compile-step (conj step/default-rules swipe) [:swipe :#carousel :left])
 ```
 
 For a browser kind, also add a `perform-op` defmethod in the adapter — it

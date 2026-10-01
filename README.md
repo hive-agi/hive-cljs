@@ -29,10 +29,10 @@ step vector**:
 
 ```clojure
 [[:goto "/inbox"]
- [:click "#refresh"]
- [:wait-for-state ["model" "loading"] "v === false"]
- [:expect-state  ["model" "items" "length"] "v === 3"]   ; state
- [:expect-text   "#count" "3 messages"]]                  ; rendering
+ [:click :#refresh]
+ [:wait-for-state ["model" "loading"] (= v false)]
+ [:expect-state  ["model" "items" "length"] (= v 3)]   ; state
+ [:expect-text   :#count "3 messages"]]                ; rendering
 ```
 
 That split is a debugging instrument. `:expect-text` red while `:expect-state`
@@ -44,14 +44,20 @@ instead, over shadow's nREPL:
 
 ```clojure
 [[:goto "/"]
- [:click "#go"]
- [:expect-text "#hi" "Hello, pedro"]      ; browser → IBrowserDriver
- [:expect-sub [:current-user] "some?"]    ; runtime → ICljsEval
- [:expect-db  [:user] "some?"]]
+ [:click :#go]
+ [:expect-text :#hi "Hello, pedro"]       ; browser → IBrowserDriver
+ [:expect-sub [:current-user] some?]      ; runtime → ICljsEval
+ [:expect-db  [:user] some?]]
 ```
 
 Both are the same machinery. What differs is only the **runtime vocabulary** —
 see [the three vocabularies](docs/steps.md#runtime-steps).
+
+Selectors (`:#go`, `[:li {:has-text "X"}]`), probes and predicates are Clojure
+**data**, compiled and checked before a browser opens. A CSS, JavaScript or
+ClojureScript string is still accepted verbatim, but only as an escape hatch for
+what the data cannot say: see
+[Strings are the escape hatch](docs/steps.md#strings-are-the-escape-hatch).
 
 ## Documentation
 
@@ -78,7 +84,7 @@ browser channel is the same either way.
                           :command ["elm" "make" "src/Main.elm"
                                     "--output=public/app.js"]}}
  :hive.cljs/e2e {:scenarios [{:id :smoke :steps [[:goto "/"]
-                                                 [:expect-text "h1" "Inbox"]]}]}}
+                                                 [:expect-text :h1 "Inbox"]]}]}}
 ```
 
 Serve the app, and DOM scenarios work with **no changes to your application**.

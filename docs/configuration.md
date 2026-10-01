@@ -228,7 +228,7 @@ verdict between file writes.
                             :is-mobile true
                             :has-touch true
                             :tags #{:ios :mobile}}}
- :iframe         "#player"                ; optional; scopes steps to a child document
+ :iframe         :#player                 ; optional; scopes steps to a child document
  :artifacts-dir  "<root>/.hive-cljs/artifacts"
  :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
  :app-db-schema  my.app.schema/app-db     ; optional — asserted between steps
@@ -294,19 +294,20 @@ the application inside an iframe. `document` in the top page is then the
 
 ```clojure
 ;; without :iframe, each step has to carry its own way in
-[:expect-js "document.querySelector('hyperframes-player')
-               .shadowRoot.querySelector('iframe')
-               .contentDocument.querySelectorAll('.fragment.visible').length === 1"]
+[:expect-js (= 1 (dom/count (.-contentDocument
+                              (dom/one (.-shadowRoot (dom/one :hyperframes-player))
+                                       :iframe))
+                             :.fragment.visible))]
 
 ;; with it, the step is the question again
-[:expect-count ".fragment.visible" 1]
+[:expect-count :.fragment.visible 1]
 ```
 
 Set it on `:hive.cljs/e2e` for the whole manifest, or on one scenario to
 override:
 
 ```clojure
-{:id :deck :iframe "hyperframes-player iframe" :steps [[:goto "/"] …]}
+{:id :deck :iframe [:in :hyperframes-player :iframe] :steps [[:goto "/"] …]}
 ```
 
 It scopes **both** channels: the DOM steps and the JavaScript ones evaluate
@@ -323,6 +324,12 @@ while reporting a pass, which is the confusion this option exists to remove.
 
 Named `:iframe` and not `:frame`, because `:frame` is already the re-frame2
 frame id.
+
+`:iframe` is [selector data](steps.md#selectors-are-data), like a step's
+selector: `:#player` or `[:in :hyperframes-player :iframe]`. The plan compiles
+it once, so a malformed one is a `:selector/malformed` error (tagged
+`:key :iframe`) before a browser opens. A string still works, as the
+[escape hatch](steps.md#strings-are-the-escape-hatch).
 
 #### `:app-db-schema` — one schema, asserted between steps
 

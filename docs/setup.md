@@ -146,11 +146,11 @@ Any `:down` port carries a typed reason:
 {:hive.cljs/e2e
  {:scenarios [{:id :login :tags [:smoke]
                :steps [[:goto "/"]
-                       [:wait-for "#go"]
-                       [:expect-hidden "#hi"]
-                       [:click "#go"]
-                       [:expect-text "#hi" "Hello, pedro"]
-                       [:expect-sub [:current-user] "#(= % \"pedro\")"]
+                       [:wait-for :#go]
+                       [:expect-hidden :#hi]
+                       [:click :#go]
+                       [:expect-text :#hi "Hello, pedro"]
+                       [:expect-sub [:current-user] (fn [u] (= u "pedro"))]
                        [:screenshot "logged-in"]]}]}}
 ```
 
@@ -165,6 +165,10 @@ login: pass (8 pass, 0 fail, 0 error, 0 incomplete, 0 skipped)
 `:expect-sub` is the part a DOM-only tool cannot do: it evaluates
 `@(re-frame.core/subscribe [:current-user])` **inside the running app**. See
 [steps.md](steps.md) for the full vocabulary.
+
+Selectors are data (`:#go` is `#go`) and the predicate is a form; the plan
+checks both before a browser opens. A string works in either place as the
+[escape hatch](steps.md#strings-are-the-escape-hatch).
 
 The runtime channel needs a page open, because that is what connects a JS runtime
 to shadow. `No available JS runtime` from `cljs eval` means no browser has loaded
@@ -266,8 +270,8 @@ conditions, an assertion the generated body does not make:
 (deftest ad-hoc-steps-need-no-manifest-entry
   (is (cljs-e2e/passed?
        (cljs-e2e/run-steps! root :probe
-                            [[:goto "/"] [:click "#go"]
-                             [:expect-sub [:current-user] "some?"]]))))
+                            [[:goto "/"] [:click :#go]
+                             [:expect-sub [:current-user] some?]]))))
 ```
 
 `explain` renders the summary plus the first failing step, so a red CI log tells
@@ -305,7 +309,7 @@ server to connect to and no nREPL port to find.
  :hive.cljs/e2e {:scenarios
                  [{:id :smoke
                    :steps [[:goto "/"]
-                           [:expect-text "h1" "Inbox"]]}]}}
+                           [:expect-text :h1 "Inbox"]]}]}}
 ```
 
 `:command` is optional — leave it out and scenarios still run, you just get no
@@ -369,17 +373,18 @@ Now both channels are available in one step vector:
 
 ```clojure
 [[:goto "/"]
- [:click "#refresh"]
- [:wait-for-state ["model" "loading"] "v === false"]
- [:expect-state  ["model" "items" "length"] "v === 3"]   ; state
- [:expect-text   "#count" "3 messages"]]                  ; rendering
+ [:click :#refresh]
+ [:wait-for-state ["model" "loading"] (= v false)]
+ [:expect-state  ["model" "items" "length"] (= v 3)]   ; state
+ [:expect-text   :#count "3 messages"]]                ; rendering
 ```
 
 Red on the last line while the one above it is green localises the bug to the
 view. That split is the reason to expose state at all.
 
-`[:expect-js "…"]` is there too when you would rather write a raw expression
-than install anything.
+`[:expect-js (= js/document.title "Inbox")]` is there too when you would rather
+write an expression against the page than install anything; see
+[probe forms](steps.md#probe-forms).
 
 ### What this toolchain does not do
 
@@ -420,8 +425,11 @@ in, so one in a subdirectory shadows the root one for anything run there:
     :tags  [:site]
     :doc   "The shipped page is HTML first: slides before any script."
     :steps [[:goto "/index.html"]
-            [:wait-for ".reveal .slides section.present"]
-            [:expect-js "fetch(location.pathname).then(function(r){return r.text();}).then(function(h){return h.indexOf('<section') < h.indexOf('<script');})"]]}]}}
+            [:wait-for [:in :.reveal :.slides :section.present]]
+            [:expect-js (.then (.then (js/fetch js/location.pathname)
+                                      (fn [r] (.text r)))
+                               (fn [h] (< (.indexOf h "<section")
+                                          (.indexOf h "<script"))))]]}]}}
 ```
 
 ```clojure
