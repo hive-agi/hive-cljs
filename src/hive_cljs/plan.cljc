@@ -57,7 +57,8 @@
              :ignore-https-errors (boolean (:ignore-https-errors e2e))
              :artifacts-dir (:artifacts-dir e2e)}
       (:viewport e2e) (assoc :viewport (:viewport e2e))
-      (:iframe e2e)   (assoc :iframe (:iframe e2e)))))
+      (:iframe e2e)   (assoc :iframe (:iframe e2e))
+      (:window-class e2e) (assoc :window-class (:window-class e2e)))))
 
 (defn runtime-opts
   "Runtime-channel options for a run — what the boundary needs that the browser

@@ -259,6 +259,9 @@
    [:base-url NonBlankString]
    [:browser BrowserEngine]
    [:headless :boolean]
+   ;; X11 WM_CLASS of a HEADED browser window (default "hive-cljs-headed"), so
+   ;; a window manager can send test browsers to their own workspace.
+   [:window-class {:optional true} NonBlankString]
    ;; Accept a TLS certificate the browser cannot verify. For a dev gateway
    ;; behind a self-signed certificate (Envoy in docker compose); never for a
    ;; public origin.

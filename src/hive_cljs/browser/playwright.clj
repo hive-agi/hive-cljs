@@ -306,9 +306,24 @@
 ;; Session lifecycle
 ;; =============================================================================
 
+(def default-window-class
+  "X11 WM_CLASS a headed browser window carries unless the manifest names one."
+  "hive-cljs-headed")
+
+(defn window-args
+  "Launch arguments that stamp `window-class` onto a HEADED window's WM_CLASS,
+   so a window manager can place it. Chromium and Firefox (GTK) take
+   `--class=NAME`; headless launches and WebKit get none."
+  [engine headless window-class]
+  (if (or headless (= :webkit engine) (empty? window-class))
+    []
+    [(str "--class=" window-class)]))
+
 (defn- launch-browser
-  ^Browser [^Playwright pw engine headless]
-  (let [opts (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))]
+  ^Browser [^Playwright pw engine headless window-class]
+  (let [args (window-args engine headless window-class)
+        opts (cond-> (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))
+               (seq args) (.setArgs ^java.util.List (vec args)))]
     (case engine
       :firefox (.launch (.firefox pw) opts)
       :webkit  (.launch (.webkit pw) opts)
@@ -322,10 +337,12 @@
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
   (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors
-                            viewport user-agent is-mobile has-touch device-scale-factor iframe]}]
+                            viewport user-agent is-mobile has-touch device-scale-factor iframe
+                            window-class]}]
     (try
       (let [^Playwright pw (Playwright/create)
-            br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless))
+            br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless)
+                                (or window-class default-window-class))
             ctx-opts (cond-> (Browser$NewContextOptions.)
                        ignore-https-errors (.setIgnoreHTTPSErrors true)
                        viewport (.setViewportSize (int (:width viewport)) (int (:height viewport)))

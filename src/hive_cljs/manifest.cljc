@@ -211,7 +211,7 @@
             :scenarios     (expand-matrix entries matrix)
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
-                             :ignore-https-errors :viewport :iframe
+                             :ignore-https-errors :viewport :iframe :window-class
                              :app-db-schema :app-db-check])
            (when (seq matrix) {:matrix matrix}))))
 

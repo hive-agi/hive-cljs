@@ -256,6 +256,7 @@ test changed. A build declaring neither key reports `:build-tool/not-supervised`
 {:base-url       "http://localhost:8280"  ; inferred from a build's :http-port
  :browser        :chromium                ; :chromium | :firefox | :webkit
  :headless       true
+ :window-class   "hive-cljs-headed"       ; WM_CLASS of a headed window (X11)
  :timeout-ms     15000
  :poll-ms        250                      ; condition-wait poll interval
  :viewport       {:width 1280 :height 800} ; optional; a scenario may override
@@ -287,6 +288,35 @@ Relative `:goto` URLs resolve against the scenario's base URL — the
 through.
 Screenshots land in `:artifacts-dir` and are listed in the run report's
 `:run/artifacts`.
+
+#### `:window-class`: keeping headed browsers out of your way
+
+A headed run (`:headless false`) opens real Chromium or Firefox windows. On X11
+each one is launched with `--class=<window-class>`, default
+`"hive-cljs-headed"`, so the window manager can place them away from the window
+you are typing in. Headless runs and WebKit get no flag.
+
+XMonad: send them to a workspace without switching the view, and ignore their
+activation requests (Playwright activates the window on launch and on
+`bringToFront`, which the stock EWMH hook answers by switching workspace):
+
+```haskell
+import XMonad.Hooks.EwmhDesktops (ewmh, setEwmhActivateHook)
+import XMonad.Hooks.ManageHelpers (doFocus)
+
+myManageHook = composeAll
+  [ className =? "hive-cljs-headed" --> doShift (myWorkspaces !! 4)  -- first, so it wins
+  , ... ]
+
+myActivateHook :: ManageHook
+myActivateHook = do
+  c <- className
+  if c == "hive-cljs-headed" then mempty else doFocus
+
+main = xmonad $ setEwmhActivateHook myActivateHook $ ewmh $ def { manageHook = myManageHook, ... }
+```
+
+Other window managers match the same class (i3/sway: `for_window [class="hive-cljs-headed"] move to workspace 5`).
 
 #### `:matrix` — one scenario, several observation surfaces
 
@@ -454,6 +484,7 @@ A run that measured nothing is `:unavailable`, never a pass.
 | `shadow :nrepl-port` | none — runtime channel disabled |
 | `e2e :base-url` | per scenario: the named `:build`'s `:http-port`, else this key, else `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |
 | `e2e :browser` / `:headless` / `:timeout-ms` | `:chromium` / `true` / `15000` |
+| `e2e :window-class` | `"hive-cljs-headed"` (headed Chromium/Firefox only) |
 | `e2e :poll-ms` | `250` |
 | `e2e :artifacts-dir` | `<root>/.hive-cljs/artifacts` |
 | `e2e :scenario-paths` / `:faults` | none / `[]` |
