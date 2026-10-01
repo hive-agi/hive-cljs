@@ -21,13 +21,22 @@
    {:id :inputs :build :app :tags [:inputs]
     :steps [[:goto "/"]
             [:wait-for :#name]
+            ;; Every input action is followed by an assertion on the state the
+            ;; handler wrote AND on the DOM, so a keystroke that never reaches
+            ;; the renderer fails here rather than further downstream.
             [:fill :#name "ada"]
+            [:wait-for-sub [:name] (fn [v] (= v "ada"))]
             [:expect-value :#name "ada"]
             [:select :#country "BR"]
+            [:wait-for-sub [:country] (fn [v] (= v "BR"))]
             [:expect-value :#country "BR"]
             [:check :#agree]
+            [:wait-for-sub [:agree] true?]
+            [:expect-js (.-checked (dom/one :#agree))]
             [:hover :#go]
+            [:expect-js (dom/matches? :#go ":hover")]
             [:press :#name "Enter"]
+            [:wait-for-sub [:echo] (fn [v] (= v "ada"))]
             [:expect-text :#echo "ada"]]}]}
  :hive.cljs/watch {:on-build-success [[:run-e2e {:tags [:smoke]}]]
                    :debounce-ms 300}}
