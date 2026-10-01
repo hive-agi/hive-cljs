@@ -4,12 +4,14 @@ A scenario is a vector of step vectors. The head keyword is the step kind; the
 rest are its arguments. Steps are **data** — they compile to port-neutral ops
 before anything touches a browser.
 
-Each step is routed to one of two channels:
+Each step is routed to one of three channels:
 
 - **browser** → `IBrowserDriver` (Playwright): the DOM
 - **runtime** → `ICljsEval` (shadow cljs-eval over nREPL): the running app
+- **http** → `IHttpChannel` (the JDK HTTP client): the harness itself, acting
+  out of band; see [HTTP steps](#http-steps-the-harness-acts-out-of-band)
 
-One scenario mixes both freely. That is the point: `:expect-text` proves what the
+One scenario mixes them freely. That is the point: `:expect-text` proves what the
 user sees, `:expect-sub` proves what the app believes.
 
 Both channels address the page the session opened. When the application under
@@ -408,6 +410,93 @@ condition never held within 15000ms — last value {:status "pending"}
 Waiting on a DOM element as a proxy for state only works when a suitable element
 happens to exist. These need none.
 
+## HTTP steps: the harness acts out of band
+
+Some actors are not the user: a payment provider confirming a charge, a
+regtest node mining a block, a fake clock moving forward. Driving them through
+a hosted helper page costs a `:goto` to another origin, and that discards the
+page the runtime channel is pinned to, so every later `:expect-sub` is gone.
+An HTTP step is made by the **harness**, not the browser: the page stays where
+it is and state assertions keep working to the end of the scenario.
+
+```clojure
+:hive.cljs/e2e
+{:http-allow ["localhost:12345" "localhost:18443"]
+ :scenarios
+ [{:id :pay-by-card
+   :steps [[:goto "/checkout"]
+           [:click :#pay]
+           [:wait-for-sub [:order :invoice] some?]
+           [:http {:method :post
+                   :url    "http://localhost:12345/v1/charges/confirm"
+                   :headers {:authorization "Bearer sk_test"}
+                   :body   {:invoice "inv-1" :amount 500}
+                   :as     :json}]
+           [:expect-http {:status 200 :body-includes {:paid true}}]
+           [:wait-for-sub [:order :status] (fn [s] (= s :paid))]
+           [:expect-text :#status "Paid"]]}]}
+```
+
+| Step | Does |
+|---|---|
+| `[:http {:url "http://host:port/path" …}]` | the harness sends the request; its response becomes the run's **last response** |
+| `[:expect-http {:status 200 …}]` | asserts on the last response |
+
+`:http` takes one map, validated when the plan compiles (closed: an unknown key
+is `:step/malformed`):
+
+| Key | |
+|---|---|
+| `:url` | required; ABSOLUTE `http`/`https`, plain host (no userinfo, no IPv6 literal) |
+| `:method` | `:get` (default) `:post` `:put` `:patch` `:delete` `:head` `:options` |
+| `:headers` | name → value; names are lower-cased |
+| `:body` | a string is sent verbatim; any other value is encoded as JSON with `content-type: application/json` unless you set one |
+| `:as` | `:json` decodes the response body to EDN (keyword keys) for `:expect-http`; `:text` (default) keeps it a string |
+| `:timeout-ms` | per request; defaults to the e2e `:timeout-ms` |
+
+`:expect-http` takes one map; every key present must hold:
+
+| Key | Holds when |
+|---|---|
+| `:status` | equals the int, or is a member of a set `#{200 201}` |
+| `:body-includes` | the decoded body INCLUDES the data: maps by key subset (extra keys fine), vectors element by element, scalars by value, numbers numerically |
+| `:body-contains` | the raw body text contains the substring |
+| `:headers` | each named header has exactly that value |
+
+A failure names every mismatch, with the path into the body:
+`status 402, expected 200; body at [:paid]: expected true, got false`.
+
+**Semantics.** `:http` is an *action*: any status is a request that happened
+(`:pass`, the detail records `post <url> → 402`), so judging the answer is
+`:expect-http`'s job. No response at all (connection refused, timeout) is an
+`:error`, as is a body that `:as :json` cannot parse. With no HTTP channel
+connected the step is `:incomplete`. Redirects are not followed, so a 3xx is
+judged, never silently chased to another host. `:expect-http` is an
+**assertion that only observes**, declared on its op (`:op/assert? true
+:op/read-only? true`), and an `:http` op is not read-only, so a `:mutations`
+app-db invariant runs after it.
+
+### The allowlist is the escape-hatch control
+
+The HTTP channel could address anything, so it is closed by default.
+`:http-allow` in `:hive.cljs/e2e` lists the `host:port` authorities a plan may
+address, always with the port (`"localhost:12345"`; a scheme default is spelled
+`"example.test:443"`). Checked when the **plan** is built, before a browser
+opens:
+
+```clojure
+[:http {:url "http://localhost:9999/pay"}]
+; => :http/host-not-allowed {:index 2 :authority "localhost:9999"
+;      :allowed ["localhost:12345"] :hint "add \"localhost:9999\" to :hive.cljs/e2e :http-allow"}
+[:expect-http {:status 200}]   ; before any :http
+; => :http/no-request-yet {:index 0}
+```
+
+No `:http-allow` at all means no `:http` step plans. The list is a manifest
+fact, not a step argument, so a scenario cannot widen it. There is
+deliberately no shell or exec step: an HTTP call to a declared service is the
+whole surface.
+
 ## The app-db invariant channel
 
 Declare a malli schema for the whole app-db and every scenario becomes a
@@ -508,6 +597,10 @@ hive-cljs, so a new kind needs no edit here to behave correctly:
 | `:op/assert?`    | the runtime channel's returned value IS the verdict — falsy fails |
 | `:op/poll?`      | a condition polled until it holds (`:wait-for-*`), not asserted once |
 | `:op/read-only?` | the step only observes, so a `:mutations` app-db invariant skips it |
+
+`:op/assert?` is not runtime-only: on the HTTP channel it is what separates
+`:expect-http` (judges the last response) from `:http` (makes a request), and
+the plan's allowlist check reads it the same way.
 
 A runtime assertion of your own stamps them on the op it returns:
 

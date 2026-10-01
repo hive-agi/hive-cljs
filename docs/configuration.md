@@ -273,6 +273,7 @@ test changed. A build declaring neither key reports `:build-tool/not-supervised`
  :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
  :app-db-schema  my.app.schema/app-db     ; optional — asserted between steps
  :app-db-check   :every-step              ; :every-step | :mutations | :final
+ :http-allow     ["localhost:12345"]      ; optional — host:port an [:http …] step may address
  :faults         [{:id     :status-hole   ; optional — the mutation catalog
                    :target my.app.view-model/derive-status
                    :with   (constantly nil)}]  ; a form; a string still works
@@ -490,6 +491,7 @@ A run that measured nothing is `:unavailable`, never a pass.
 | `e2e :scenario-paths` / `:faults` | none / `[]` |
 | `e2e :app-db-schema` | none — no invariant asserted |
 | `e2e :app-db-check` | `:every-step` (only consulted with a schema) |
+| `e2e :http-allow` | none — no `[:http …]` step plans ([steps.md](steps.md#http-steps-the-harness-acts-out-of-band)) |
 | `watch :debounce-ms` | `500` |
 | `watch :on-build-success` / `:on-build-failure` | `[]` / `[]` |
 | `watch :builds` | all builds |

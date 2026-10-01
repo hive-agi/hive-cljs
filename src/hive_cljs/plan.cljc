@@ -9,7 +9,8 @@
             [hive-cljs.selector :as selector]
             [hive-cljs.step :as step]
             [hive-dsl.result :as r]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [hive-cljs.http :as http]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -99,11 +100,18 @@
    e2e :frame) is stamped onto runtime ops so re-frame2 frame-scoped apps get
    frame-pinned subscribe/dispatch/db reads. A scenario's platform/context
    options, viewport, and iframe each override the manifest-wide values for
-   that run's session."
+   that run's session.
+
+   Every `:http` op is checked against the manifest's `:http-allow` HERE, so a
+   request to a host the manifest does not list is the plan's
+   `:http/host-not-allowed` error and never reaches the harness's channel."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
    (let [base-url (scenario-base-url manifest scenario)
          compiled (step/compile-steps rules (:steps scenario))
+         allowed  (when (r/ok? compiled)
+                    (http/check-ops (get-in manifest [:manifest/e2e :http-allow] [])
+                                    (:ok compiled) step/assertion-op?))
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
          session  (compile-iframe
@@ -118,6 +126,7 @@
                     (:iframe scenario) (assoc :iframe (:iframe scenario))))]
      (cond
        (r/err? compiled) compiled
+       (r/err? allowed)  (assoc allowed :scenario (:id scenario))
        (r/err? session)  session
        :else
        (r/ok (cond-> {:plan/scenario (:id scenario)

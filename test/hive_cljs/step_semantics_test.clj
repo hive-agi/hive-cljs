@@ -33,6 +33,8 @@
    :eval-js [:eval-js "1"] :expect-js [:expect-js "true"]
    :wait-for-js [:wait-for-js "true"] :expect-fits [:expect-fits ".a"]
    :expect-state [:expect-state :k "v"] :wait-for-state [:wait-for-state :k "v"]
+   :http [:http {:method :post :url "http://localhost:1/pay"}]
+   :expect-http [:expect-http {:status 200}]
    :screenshot [:screenshot "shot"]})
 
 (defn- compiled [kind] (:ok (step/compile-step (get sample-steps kind))))
@@ -74,7 +76,10 @@
   (is (= (:read-only pre-change) step/read-only-kinds boundary/read-only-kinds)))
 
 (deftest the-old-sets-answers-are-preserved
-  (doseq [k (keys sample-steps)
+  ;; Kinds added after the sets were frozen state their semantics on the op
+  ;; only (`:expect-http` asserts with no entry in any set); they are checked
+  ;; by `every-compiled-op-carries-its-rules-semantics` instead.
+  (doseq [k (remove #{:http :expect-http} (keys sample-steps))
           :let [op (compiled k)]]
     (testing (str k)
       (is (= (contains? (:assert pre-change) k) (step/assertion-op? op) (:op/assert? op)))

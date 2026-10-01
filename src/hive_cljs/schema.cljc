@@ -109,6 +109,57 @@
    [:sources {:optional true} [:set [:enum :console :pageerror]]]
    [:ignore {:optional true} [:vector :string]]])
 
+(def HttpMethod
+  [:enum :get :post :put :patch :delete :head :options])
+
+(def HttpRequest
+  "The argument of an `[:http {...}]` step: a request the HARNESS makes, as
+   data. `:url` is absolute and its `host:port` must be on the manifest's
+   `:http-allow` (checked when the plan is built). A string `:body` is sent as
+   written; any other body is encoded as JSON. `:as :json` decodes the
+   response body to EDN for `:expect-http`; the default `:text` keeps it a
+   string."
+  [:map {:closed true}
+   [:method {:optional true} HttpMethod]
+   [:url NonBlankString]
+   [:headers {:optional true} [:map-of [:or :keyword :string] [:or :string :int]]]
+   [:body {:optional true} :any]
+   [:as {:optional true} [:enum :json :text]]
+   [:timeout-ms {:optional true} [:int {:min 1}]]])
+
+(def HttpExpect
+  "The argument of `[:expect-http {...}]`, judged against the LAST `:http`
+   response of the run. Every key present must hold:
+
+   - `:status`        an int, or a set of acceptable ints
+   - `:body-includes` data the decoded body must INCLUDE: maps by key subset,
+                      vectors element by element, scalars by value
+   - `:body-contains` a substring of the raw body text
+   - `:headers`       header name → exact value"
+  [:and
+   [:map {:closed true}
+    [:status {:optional true} [:or [:int {:min 100 :max 599}] [:set [:int {:min 100 :max 599}]]]]
+    [:body-includes {:optional true} :any]
+    [:body-contains {:optional true} :string]
+    [:headers {:optional true} [:map-of [:or :keyword :string] [:or :string :int]]]]
+   [:fn {:error/message "an :expect-http must expect something"} seq]])
+
+(def HttpWire
+  "A request as an `IHttpChannel` adapter receives it: method, absolute URL,
+   lower-cased string headers, an already-encoded string body."
+  [:map {:closed true}
+   [:method HttpMethod]
+   [:url NonBlankString]
+   [:headers [:map-of :string :string]]
+   [:body {:optional true} :string]
+   [:timeout-ms [:int {:min 1}]]])
+
+(def HttpAuthority
+  "One `host:port` an `:http` step may address, e.g. \"localhost:12345\".
+   The port is always written, so an allowance never widens silently to a
+   scheme's default."
+  [:re #"^[A-Za-z0-9.\-]+:[0-9]{1,5}$"])
+
 (def Selector
   "What a selector-taking step accepts: a CSS/Playwright string (passed
    through), or selector DATA — a `:tag#id.class` keyword, an attribute map,
@@ -120,8 +171,11 @@
     selector/valid?]])
 
 (def OpChannel
-  "Which port executes a compiled op."
-  [:enum :browser :runtime])
+  "Which port executes a compiled op: the browser (`IBrowserDriver`), the
+   application runtime (`ICljsEval`), or the HARNESS itself over HTTP
+   (`IHttpChannel`) — an out-of-band actor the scenario plays without leaving
+   the page."
+  [:enum :browser :runtime :http])
 
 (def Op
   "Compiled step: the port-neutral instruction an adapter interprets.
@@ -281,6 +335,11 @@
    [:frame {:optional true} :keyword]
    [:app-db-schema {:optional true} :symbol]
    [:app-db-check {:optional true} AppDbCheck]
+   ;; The `host:port` authorities an `[:http {...}]` step may address. The
+   ;; harness's HTTP channel is an escape hatch, so it is closed by default:
+   ;; with no allowlist no :http step plans at all, and a URL off the list is
+   ;; a plan-time :http/host-not-allowed error, never a runtime surprise.
+   [:http-allow {:optional true} [:vector HttpAuthority]]
    [:faults [:vector Fault]]
    [:artifacts-dir NonBlankString]
    [:scenarios [:vector Scenario]]])

@@ -9,7 +9,8 @@
             [hive-cljs.selector :as sel]
             [hive-dsl.result :as r]
             [malli.core :as m]
-            [hive-cljs.dialect.probe :as probe]))
+            [hive-cljs.dialect.probe :as probe]
+            [malli.error :as me]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -226,6 +227,45 @@
    (probe-rule :expect-state 2 1 {'v "v"} :assert)
    (probe-rule :wait-for-state 2 1 {'v "v"} :poll)])
 
+(defn- data-rule
+  "Rule for a step taking ONE map argument validated by malli `schema` while
+   the plan compiles, routed to `channel`. `hint` names the shape a malformed
+   one should have taken."
+  [step-kind channel schema hint & sem]
+  (let [flags (semantics-of sem)]
+    (reify
+      IStepRule
+      (rule-id [_] step-kind)
+      (applies? [_ step] (= step-kind (kind step)))
+      (compile-op [_ step]
+        (cond
+          (not= 1 (count (args step))) (arity-err step 1)
+
+          (not (m/validate schema (first (args step))))
+          (r/err :step/malformed
+                 {:step step :kind step-kind :hint hint
+                  :explain (me/humanize (m/explain schema (first (args step))))})
+
+          :else (r/ok (op step channel :sem flags))))
+      IStepSemantics
+      (semantics [_] flags))))
+
+(def http-rules
+  "Steps the HARNESS executes through `ports/IHttpChannel` — an out-of-band
+   actor (a payment provider, a miner, a clock) the scenario plays without a
+   `:goto` to another origin, so the pinned runtime survives the call.
+
+   `:http` makes a request and keeps its response as the run's LAST one; it is
+   an action, never read-only, since the world it touches is the app's world.
+   `:expect-http` asserts on that last response and only observes. Which
+   hosts a request may address is the PLAN's business (`:http-allow`), not
+   the rule's: the rule checks shape, the plan checks the manifest."
+  [(data-rule :http :http s/HttpRequest
+              "{:method :post :url \"http://localhost:PORT/...\" :headers {..} :body <data> :as :json}")
+   (data-rule :expect-http :http s/HttpExpect
+              "{:status 200 :body-includes {..} :body-contains \"..\" :headers {..}}"
+              :assert :read-only)])
+
 ;; FALLBACK sets for an op that carries no semantic flag — one built by hand,
 ;; or by a third-party rule written before ops carried their semantics. An op
 ;; compiled by a built-in rule states every flag and never reaches these.
@@ -278,6 +318,7 @@
                synchronisation-rules
                dom-assertion-rules
                runtime-rules
+               http-rules
                artifact-rules)))
 
 (defn known-kinds

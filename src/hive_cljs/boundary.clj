@@ -15,7 +15,8 @@
             [clojure.data.json :as json]
             [hive-cljs.coverage :as coverage]
             [clojure.walk :as walk]
-            [hive-cljs.step :as step])
+            [hive-cljs.step :as step]
+            [hive-cljs.http :as http])
   (:import [java.io PushbackReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -460,11 +461,61 @@
       (swap! state assoc :binding outcome)
       outcome)))
 
+;; =============================================================================
+;; HTTP-channel execution — the harness acts out of band
+;; =============================================================================
+
+(defn perform-http!
+  "Execute an :http-channel op through `ports/IHttpChannel`. Returns
+   `[outcome last-response]`: a request op yields the decoded response as the
+   new last one; an assertion op (`step/assertion-op?`) judges `last` and
+   leaves it as it was.
+
+   No channel is `:incomplete`, never a pass. A request that got no response
+   at all is an `:error`; ANY status is a passing request — whether it was the
+   right one is what `:expect-http` is for."
+  [channel op last {:keys [timeout-ms]}]
+  (cond
+    (step/assertion-op? op)
+    [(http/judge (first (:op/args op)) last) last]
+
+    (nil? channel)
+    [{:state :incomplete
+      :detail "no HTTP channel connected, so the harness could not make this request"}
+     last]
+
+    :else
+    (let [spec    (first (:op/args op))
+          req     (http/build-request spec timeout-ms)
+          started (System/currentTimeMillis)
+          res     (ports/request! channel req)
+          elapsed (- (System/currentTimeMillis) started)
+          decoded (when (r/ok? res) (http/decode-response (:as spec) (:ok res)))]
+      (cond
+        (r/err? res)
+        [{:state :error :detail (pr-str res) :elapsed-ms elapsed} nil]
+
+        (r/err? decoded)
+        [{:state :error :detail (pr-str decoded) :elapsed-ms elapsed} nil]
+
+        :else
+        [{:state :pass
+          :detail (str (name (:method req)) " " (:url req) " → " (:status (:ok decoded)))
+          :elapsed-ms elapsed}
+         (:ok decoded)]))))
+
 (defn- outcome-of
   [{:keys [driver cljs-eval] :as deps} state session build-id token rt op]
-  (if (= :runtime (:op/channel op))
+  (case (:op/channel op)
+    :runtime
     (or (when (and token cljs-eval) (runtime-binding deps state build-id token))
         (perform-runtime! cljs-eval build-id op rt))
+
+    :http
+    (let [[outcome last] (perform-http! (:http deps) op (:http/last @state) rt)]
+      (swap! state assoc :http/last last)
+      outcome)
+
     (let [res (ports/perform! driver session op)]
       (if (r/err? res) {:state :error :detail (pr-str res)} (:ok res)))))
 

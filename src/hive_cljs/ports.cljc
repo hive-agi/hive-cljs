@@ -183,6 +183,29 @@
      with a guarded one-liner rather than a dependency."))
 
 ;; =============================================================================
+;; IHttpChannel — the harness's own out-of-band channel
+;; =============================================================================
+
+(defprotocol IHttpChannel
+  "Make one HTTP request FROM THE HARNESS, not from the page.
+
+   The third channel beside the browser and the runtime. It exists so a
+   scenario can play an out-of-band actor — pay an invoice, mine a block, move
+   a clock — without navigating the driven page to another origin, which would
+   discard the runtime pinned to it.
+
+   The adapter is a dumb wire: request building, the host allowlist and the
+   judging of a response are pure (`hive-cljs.http`) and happen before and
+   after it. It never sees a request the plan did not admit."
+
+  (request! [this req]
+    "Send `req`, a `schema/HttpWire` (method, absolute url, string headers, an
+     already-encoded string body, timeout-ms), and return a Result of
+     `{:status int :headers {name value} :body string}`. Any HTTP status is
+     an ok — judging it is the scenario's business; only a request that got
+     no response at all is an err."))
+
+;; =============================================================================
 ;; IToolchain — how one frontend stack's channels are opened and released
 ;; =============================================================================
 
@@ -287,6 +310,8 @@
 (defn session-bound? [x] (satisfies? ISessionBound x))
 
 (defn page-bootstrap? [x] (satisfies? IPageBootstrap x))
+
+(defn http-channel? [x] (satisfies? IHttpChannel x))
 
 (defn toolchain? [x] (satisfies? IToolchain x))
 (defn file-stamps? [x] (satisfies? IFileStamps x))

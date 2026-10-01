@@ -213,6 +213,7 @@
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
                              :ignore-https-errors :viewport :iframe :window-class
                              :app-db-schema :app-db-check])
+           (when (contains? raw :http-allow) {:http-allow (vec (:http-allow raw))})
            (when (seq matrix) {:matrix matrix}))))
 
 (defn normalize-action
