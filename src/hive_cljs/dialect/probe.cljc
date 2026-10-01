@@ -55,12 +55,20 @@
 (defn- kw-str [k]
   (if-let [n (namespace k)] (str n "/" (name k)) (name k)))
 
-(defn- local-name
-  "A fresh JS identifier for a local, so shadowing in `let` stays Clojure's."
+(defn- local-name*
   [ctx sym]
   (let [base (str/replace (name sym) #"[^A-Za-z0-9_$]" "_")
         base (if (re-find #"^[0-9]" base) (str "_" base) base)]
     (str base "_" (vswap! (:counter ctx) inc))))
+
+(defn- local-name
+  "A fresh JS identifier for a local, so shadowing in `let` stays Clojure's.
+   A symbol the caller PINNED keeps its own name, so source rendered apart
+   from this form (a string predicate over `v`) can still name it."
+  [ctx sym]
+  (if (contains? (:pin ctx) sym)
+    (name sym)
+    (local-name* ctx sym)))
 
 ;; =============================================================================
 ;; Head normalisation
@@ -225,6 +233,21 @@
   (str "(" (emit ctx env m) ")"
        (apply str (map #(str "?.[" (emit ctx env %) "]") path))))
 
+(defn- emit-set!
+  "Assignment to a `js/` path or an interop `(.-prop target)` place."
+  [ctx env place x]
+  (let [target (cond
+                 (and (symbol? place) (= "js" (namespace place)))
+                 (emit-symbol env place)
+
+                 (and (seq? place) (symbol? (first place)) (nil? (namespace (first place)))
+                      (str/starts-with? (name (first place)) ".-"))
+                 (emit ctx env place)
+
+                 :else (bad "set! needs a js/ path or a (.-prop target) place"
+                            {:place place}))]
+    (str "(" target " = " (emit ctx env x) ")")))
+
 (defn- seq-method
   "`(every? f xs)` and friends. The callback is applied to the element ALONE:
    JavaScript would also pass (index, array), which turns `(map js/parseInt …)`
@@ -304,6 +327,17 @@
                            (str (coll (e (first xs))) ".join('')")
                            (do (arity! k xs 2)
                                (str (coll (e (second xs))) ".join(" (e (first xs)) ")")))
+      "boolean" (str "!!(" (a1) ")")
+      "throw"   (do (arity! k xs 1)
+                    (when-not (string? (first xs))
+                      (bad "throw takes a literal message string" {:args xs}))
+                    (str "(() => { throw new Error(" (lit-str (first xs)) "); })()"))
+      "set!"    (do (arity! k xs 2) (emit-set! ctx env (first xs) (second xs)))
+      "new"     (do (when (empty? xs) (bad "new needs a constructor" {:args xs}))
+                    (when-not (and (symbol? (first xs)) (= "js" (namespace (first xs))))
+                      (bad "new takes a js/ constructor" {:args xs}))
+                    (str "(new " (emit-symbol env (first xs))
+                         "(" (args-list ctx env (rest xs)) "))"))
       "dom/one"   (let [[r s] (root-and-sel ctx env k xs)] (str "(" r ")?.querySelector(" s ")"))
       "dom/all"   (let [[r s] (root-and-sel ctx env k xs)]
                     (str "Array.from((" r ")?.querySelectorAll(" s ") ?? [])"))
@@ -396,11 +430,14 @@
 
 (defn ->js
   "JS expression for a probe `form`. `locals` names symbols bound by the
-   caller, e.g. `{'v \"v\"}` for an :expect-state predicate. Throws ex-info
+   caller, e.g. `{'v \"v\"}` for an :expect-state predicate. `:pin` names
+   symbols a `let`/`fn` in `form` binds under their own name rather than a
+   fresh one. Throws ex-info
    carrying `:probe/error` when the form is outside the language."
   ([form] (->js form {}))
-  ([form locals]
-   (emit {:counter (volatile! 0)} locals form)))
+  ([form locals] (->js form locals {}))
+  ([form locals {:keys [pin]}]
+   (emit {:counter (volatile! 0) :pin (set pin)} locals form)))
 
 (defn fn-form?
   "True when `form` denotes a FUNCTION rather than a value: a `(fn …)` form or

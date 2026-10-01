@@ -58,6 +58,22 @@
   (is (= "(document)?.querySelector(\"a\\\"); evil(); (\\\"\")"
          (probe/->js '(dom/one "a\"); evil(); (\"")))))
 
+(deftest boolean-coerces-with-javascript-truthiness
+  (is (= "!!(0)" (probe/->js '(boolean 0)))))
+
+(deftest throw-is-an-expression-with-a-pinned-message
+  (is (= "(() => { throw new Error(\"a\\\"); b\"); })()" (probe/->js '(throw "a\"); b"))))
+  (is (str/includes? (probe/problem '(throw (str "x"))) "literal message")))
+
+(deftest set!-assigns-a-js-path-or-an-interop-place
+  (is (= "(window.__hiveCljsToken = \"t\")" (probe/->js '(set! js/window.__hiveCljsToken "t"))))
+  (is (= "((window).title = 1)" (probe/->js '(set! (.-title js/window) 1))))
+  (is (str/includes? (probe/problem '(set! (dom/one "a") 1)) "set! needs")))
+
+(deftest new-constructs-a-js-global
+  (is (= "(new Error(\"m\"))" (probe/->js '(new js/Error "m"))))
+  (is (str/includes? (probe/problem '(new Error "m")) "js/ constructor")))
+
 ;; =============================================================================
 ;; Through the JS dialect
 ;; =============================================================================
@@ -75,10 +91,10 @@
 
 (deftest a-state-predicate-form-sees-the-read-value-as-v
   (let [src (js/assertion-source (op :expect-state ["model" "loading"] '(= v false)))]
-    (is (str/includes? src "return ((v === false)) ? v : false;")))
+    (is (re-find #"return \(+v === false\)+ \? v : false" src)))
   (testing "the string spelling it replaces renders the same check"
     (is (str/includes? (js/probe-source (op :wait-for-state ["m"] "v === false"))
-                       "[!!(v === false), v]"))))
+                       "[!!((v === false)), v]"))))
 
 (deftest a-clojurescript-runtime-evaluates-the-same-rendered-form
   (is (= (str "(js->clj (js/eval "
@@ -107,9 +123,9 @@
   ;; A function value is always truthy: rendering `some?` as one would pass
   ;; every assertion. It is applied to the read value instead.
   (is (str/includes? (js/assertion-source (op :expect-state ["m"] 'some?))
-                     "return ((v != null)) ? v : false;"))
+                     "(((v != null)) ? v : false)"))
   (is (str/includes? (js/probe-source (op :wait-for-state ["m"] '(fn [x] (> x 2))))
-                     "[!!((((x_1) => (x_1 > 2)))(v)), v]")))
+                     "[!!(((((x_1) => (x_1 > 2)))(v))), v]")))
 
 ;; =============================================================================
 ;; dom/* take selector DATA as well as strings

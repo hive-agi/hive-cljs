@@ -56,6 +56,13 @@
     (probe/->js (list pred 'v) state-locals)
     (expr pred state-locals)))
 
+(defn- raw
+  "Locals carrying JavaScript the caller already rendered (an authored string,
+   a predicate over `v`). A local is spliced as written, so each is
+   parenthesised to stay one operand whatever operators it holds."
+  [m]
+  (update-vals m #(str "(" % ")")))
+
 (defn truthy-value
   "JS yielding the VALUE when it is truthy and false when it is not.
 
@@ -63,7 +70,7 @@
    JavaScript falsiness is not Clojure falsiness — 0 and \"\" are failures here
    and would both survive a `some?` check on the way back."
   [source]
-  (str "(() => { const v = (" source "); return v ? v : false; })()"))
+  (probe/->js '(let [v src] (if v v false)) (raw {'src source}) {:pin #{'v}}))
 
 (defn truthy-probe
   "JS yielding `[truthy? value]` — the polled counterpart of `truthy-value`.
@@ -71,7 +78,7 @@
    The value rides along so a timeout can say 'never happened' apart from 'not
    yet'; the array reads back as a Clojure vector."
   [source]
-  (str "(() => { const v = (" source "); return [!!v, v]; })()"))
+  (probe/->js '(let [v src] [(boolean v) v]) (raw {'src source}) {:pin #{'v}}))
 
 ;; =============================================================================
 ;; The probe contract — installed by the run, not imported by the app
@@ -130,20 +137,28 @@
    mistake — the probe itself reports this, listing what was), or the value is
    genuinely absent (an ordinary assertion failure, which reads null)."
   [path]
-  (str "(() => { if (!window." probe-key ") throw new Error("
-       (src/pr-source probe-missing-message) "); return window." probe-key ".read("
-       (json-path path) "); })()"))
+  (let [probe-sym (symbol "js" (str "window." probe-key))
+        segment   (fn [x] (cond (keyword? x) (name x)
+                                (or (string? x) (number? x)) x
+                                :else (str x)))]
+    (probe/->js (list 'if probe-sym
+                      (list '.read probe-sym (mapv segment path))
+                      (list 'throw probe-missing-message)))))
 
 (defn state-assertion
   "Assert `pred` — a JS expression over the bound `v` — against the value at
    `path`. Yields the value when it holds, false when it does not."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return (" (state-pred pred) ") ? v : false; })()"))
+  (probe/->js '(let [v value] (if held v false))
+              (raw {'value (read-source path) 'held (state-pred pred)})
+              {:pin #{'v}}))
 
 (defn state-probe
   "The polled counterpart of `state-assertion`: `[held? value]`."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return [!!(" (state-pred pred) "), v]; })()"))
+  (probe/->js '(let [v value] [(boolean held) v])
+              (raw {'value (read-source path) 'held (state-pred pred)})
+              {:pin #{'v}}))
 
 (defn fits-source
   "JS asking whether everything `selector` matches stays inside its box.

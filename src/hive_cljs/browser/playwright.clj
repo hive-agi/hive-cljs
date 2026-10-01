@@ -9,6 +9,7 @@
    a new defmethod."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [hive-cljs.dialect.probe :as probe]
             [hive-cljs.ports :as ports]
             [hive-cljs.selector :as selector]
             [hive-dsl.result :as r])
@@ -258,7 +259,7 @@
 (defn token-script
   "JS source stamping `token` onto the document as `window.__hiveCljsToken`."
   [token]
-  (str "window.__hiveCljsToken = " (pr-str (str token)) ";"))
+  (probe/->js (list 'set! 'js/window.__hiveCljsToken (str token))))
 
 (defrecord PlaywrightDriver [pw-atom]
   ports/IBrowserDriver
