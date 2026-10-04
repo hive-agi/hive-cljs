@@ -3,6 +3,7 @@
             [hive-cljs.boundary :as boundary]
             [hive-cljs.step :as step]
             [hive-cljs.ports :as ports]
+            [hive-cljs.stub.ports :as stub]
             [hive-dsl.result :as r]
             [malli.core :as m]
             [hive-cljs.schema :as s]))
@@ -97,3 +98,52 @@
     (is (= :step/unknown-kind (:error (step/compile-step [:swipe "#a" :left]))))
     (is (r/ok? (step/compile-step rules [:swipe "#a" :left])))
     (is (contains? (set (step/known-kinds rules)) :swipe))))
+
+(deftest a-form-valued-runtime-step-reaches-the-channel-as-pinned-source
+  ;; The manifest is EDN, so :eval-cljs and the :expect-* predicates take a
+  ;; FORM as readily as a string. The form is printed where it crosses into
+  ;; the runtime, under pinned printer vars, so the source sent does not
+  ;; depend on the bindings of whichever thread runs the scenario.
+  (let [steps [[:eval-cljs '(when-not (= :ok (:state (plato.fit/verdict-for "welcome")))
+                              (throw (ex-info "nope" {:app/why [1 2 3 4]})))]
+               [:expect-sub [:user/current] '(fn [v] (= v "pedro"))]
+               [:expect-db [:user :name] 'string?]
+               [:wait-for-db [:items] 'seq]]
+        sent  (fn []
+                (let [ce (stub/cljs-eval (fn [_ src]
+                                           (if (.startsWith ^String src "(let [v ")
+                                             [true 1]
+                                             true)))]
+                  (doseq [st steps]
+                    (let [res (step/compile-step st)]
+                      (is (r/ok? res) (pr-str st))
+                      (is (m/validate s/Op (:ok res)))
+                      (is (= :pass (:state (boundary/perform-runtime!
+                                            ce :app (:ok res)
+                                            {:timeout-ms 100 :poll-ms 50}))))))
+                  (mapv second (stub/evals ce))))
+        base  (sent)]
+    (is (= (str "(when-not (= :ok (:state (plato.fit/verdict-for \"welcome\")))"
+                " (throw (ex-info \"nope\" {:app/why [1 2 3 4]})))")
+           (first base)))
+    (is (= "((fn [v] (= v \"pedro\")) (deref (re-frame.core/subscribe [:user/current])))"
+           (second base)))
+    (doseq [ns-maps [true false] length [nil 1] level [nil 1]
+            meta? [true false] readably [true false]]
+      (binding [*print-namespace-maps* ns-maps *print-length* length
+                *print-level* level *print-meta* meta? *print-readably* readably]
+        (is (= base (sent)))))
+    (testing "a string step still passes through verbatim"
+      (let [ce (stub/cljs-eval)]
+        (boundary/perform-runtime! ce :app (:ok (step/compile-step [:eval-cljs "#(inc %)"])))
+        (is (= ["#(inc %)"] (mapv second (stub/evals ce))))))))
+
+(deftest expect-no-errors-is-authored-as-data
+  (testing "bare, and with data options, it compiles to a browser assertion"
+    (is (= :browser (:op/channel (:ok (step/compile-step [:expect-no-errors])))))
+    (is (r/ok? (step/compile-step [:expect-no-errors {:ignore ["favicon"]
+                                                      :sources #{:pageerror}}]))))
+  (testing "JS text is not an option map, and unknown keys are refused"
+    (is (r/err? (step/compile-step [:expect-no-errors "console.error.length === 0"])))
+    (is (r/err? (step/compile-step [:expect-no-errors {:js "x"}])))
+    (is (r/err? (step/compile-step [:expect-no-errors {} {}])))))

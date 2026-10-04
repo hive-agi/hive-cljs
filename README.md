@@ -29,10 +29,10 @@ step vector**:
 
 ```clojure
 [[:goto "/inbox"]
- [:click "#refresh"]
- [:wait-for-state ["model" "loading"] "v === false"]
- [:expect-state  ["model" "items" "length"] "v === 3"]   ; state
- [:expect-text   "#count" "3 messages"]]                  ; rendering
+ [:click :#refresh]
+ [:wait-for-state ["model" "loading"] (= v false)]
+ [:expect-state  ["model" "items" "length"] (= v 3)]   ; state
+ [:expect-text   :#count "3 messages"]]                ; rendering
 ```
 
 That split is a debugging instrument. `:expect-text` red while `:expect-state`
@@ -44,14 +44,20 @@ instead, over shadow's nREPL:
 
 ```clojure
 [[:goto "/"]
- [:click "#go"]
- [:expect-text "#hi" "Hello, pedro"]      ; browser → IBrowserDriver
- [:expect-sub [:current-user] "some?"]    ; runtime → ICljsEval
- [:expect-db  [:user] "some?"]]
+ [:click :#go]
+ [:expect-text :#hi "Hello, pedro"]       ; browser → IBrowserDriver
+ [:expect-sub [:current-user] some?]      ; runtime → ICljsEval
+ [:expect-db  [:user] some?]]
 ```
 
 Both are the same machinery. What differs is only the **runtime vocabulary** —
 see [the three vocabularies](docs/steps.md#runtime-steps).
+
+Selectors (`:#go`, `[:li {:has-text "X"}]`), probes and predicates are Clojure
+**data**, compiled and checked before a browser opens. A CSS, JavaScript or
+ClojureScript string is still accepted verbatim, but only as an escape hatch for
+what the data cannot say: see
+[Strings are the escape hatch](docs/steps.md#strings-are-the-escape-hatch).
 
 ## Documentation
 
@@ -60,6 +66,7 @@ see [the three vocabularies](docs/steps.md#runtime-steps).
 | **[Setting up a project](docs/setup.md)** | nothing → a green scenario, ClojureScript or otherwise, with the traps that cost real time |
 | **[Configuration reference](docs/configuration.md)** | `.hive-project.edn` vs `hive-cljs.edn`, every key, every default |
 | **[Step reference](docs/steps.md)** | the browser + runtime vocabularies, semantics, adding a kind |
+| **[Generative walks](docs/walks.md)** | a step alphabet instead of a step vector: test.check generates walks and shrinks a failure to a minimal repro |
 | **[Mounting in a host](docs/hosting.md)** | wiring into hive-mcp, why a subdomain, diagnosing a silent mount |
 | **[Architecture](docs/architecture.md)** | CPPB layers, the ports, the toolchain and dialect seams, extension points |
 | **[Runnable example](example/)** | a wired shadow-cljs + re-frame app you can `cljs e2e run` against |
@@ -78,7 +85,7 @@ browser channel is the same either way.
                           :command ["elm" "make" "src/Main.elm"
                                     "--output=public/app.js"]}}
  :hive.cljs/e2e {:scenarios [{:id :smoke :steps [[:goto "/"]
-                                                 [:expect-text "h1" "Inbox"]]}]}}
+                                                 [:expect-text :h1 "Inbox"]]}]}}
 ```
 
 Serve the app, and DOM scenarios work with **no changes to your application**.
@@ -223,12 +230,71 @@ underneath, for hand-written tests and ad-hoc step vectors.
 Same execution path as the tool and the watcher. See
 [setup.md](docs/setup.md#7-in-a-test-suite).
 
+## Fit and derive
+
+Two pure `.cljc` libraries ride along with the addon. Neither needs a build, a
+browser or a REPL.
+
+**`hive-cljs.fit`** checks whether a laid-out thing (a slide, a card, a print
+page) stays inside the box it was given. It has one judge and accepts many
+measurers. A measurer is a `ports/IFitSource`, and it reports at one of two
+rungs: `:measured` (read off a layout engine) or `:estimated` (a box model).
+**`hive-cljs.fit.test/deffit`** turns a source into `clojure.test` vars:
+
+```clojure
+(ns my.deck.fit-gate-test
+  (:require [hive-cljs.fit.test :refer [deffit]]))
+
+(deffit deck
+  {:source   (my.deck/estimated-source)  ; ports/IFitSource
+   :universe (my.deck/content-model)     ; ports/IFitUniverse, from the document model
+   :policy   {:fit/exempt {:code "no deck ships a code slide yet"}}})
+;; => deck-was-measured, deck-rung-holds, deck-fits, deck-covers-model
+```
+
+Two of its rules are easy to miss, and missing either one gives you a gate that
+passes for the wrong reason:
+
+- **A source declares its own rung, and an estimated finding inside the
+  source's stated `:fit/margin` never fails a build.** Only a finding larger
+  than the margin fails. Smaller ones warn. A box model says `:estimated`
+  however confident it is. `:fit/strict? true` turns every warning into a
+  failure.
+- **A coverage universe must come from the document model, not from the source
+  being checked.** Otherwise the assertion is X ⊆ X, which holds for every X.
+
+A source that measured nothing and a universe that is empty are both
+`:unavailable`, never a pass.
+
+**`hive-cljs.derive`** is forward chaining over tuple facts. Rules are
+conjunctions of `?var` patterns with an optional arithmetic guard. `run` applies
+them until nothing new appears, and records provenance for every derived fact
+(`why`, `trace`, `explain`). `run-strata` adds stratified aggregation between
+fixpoints.
+
+```clojure
+(require '[hive-cljs.derive :as d])
+
+(def fx (d/run [(d/rule :illegible "Rendered below the 16px floor."
+                        '[[:size ?el ?px] [:scale :slide ?s]]
+                        (fn [{:syms [?el]}] [:illegible ?el])
+                        (fn [{:syms [?px ?s]}] (< (* ?px ?s) 16)))]
+               #{[:size :h1 40] [:size :body 18] [:scale :slide 0.5]}))
+
+(:derived fx)                    ; => #{[:illegible :body]}
+(d/explain fx [:illegible :body])
+;; => "[:illegible :body] by :illegible from [:size :body 18], [:scale :slide 0.5]"
+```
+
+Full reference with runnable examples: **[docs/fit.md](docs/fit.md)**. The worked
+example of a real gate is plato's `gate/plato/fit_gate_test.clj`.
+
 ## Installing
 
 One line in the host's `local.deps.edn`:
 
 ```clojure
-io.github.hive-agi/hive-cljs {:mvn/version "0.2.21"}
+io.github.hive-agi/hive-cljs {:mvn/version "0.3.0"}
 ```
 
 …or, when hacking on hive-cljs itself, `#:local{:root "../hive-cljs"}`.
@@ -260,6 +326,26 @@ node test/js/probe_test.mjs   # 31 — the injected probe, which Clojure cannot 
 
 No test namespace names a vendor: every test injects a stub through the ports,
 so the suite runs with nothing installed.
+
+## Releasing
+
+A push to `main` that touches `src/`, `resources/` or `deps.edn` runs the suite,
+then `clojure -T:build bump :level :patch`, tags `v{VERSION}` and deploys to
+Clojars. `bump` (overridden in `build.clj`) decides the version from `./VERSION`
+and the newest `v*` tag, compared as semver:
+
+| `VERSION` vs newest tag | published version                    |
+|-------------------------|--------------------------------------|
+| ahead (`0.3.0` > `v0.2.24`) | `VERSION` verbatim — `0.3.0`     |
+| equal (`0.2.24`)        | patch bump — `0.2.25`                |
+| behind (`0.2.23`)       | patch bump of the tag — `0.2.25`     |
+| no tag yet              | `VERSION` verbatim                   |
+
+So to cut a minor or major, set `VERSION` by hand (e.g. `0.3.0`) in the
+commit that lands on `main`; CI publishes exactly that number. Leave it alone
+and every release is the next patch. The rule is the pure
+`hive-cljs.release/decide` (`build/hive_cljs/release.clj`), unit-tested in
+`test/hive_cljs/release_test.clj`; `build/` never enters the jar.
 
 ## License
 

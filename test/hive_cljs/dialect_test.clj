@@ -6,12 +6,15 @@
    adapter for it while claiming to name no vendor. The claims here are that the
    rendering is now the channel's own, and that a channel which cannot render a
    step says so instead of letting the step look green."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.shell :as sh]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
             [hive-cljs.dialect.js :as js]
             [hive-cljs.dialect.re-frame :as re-frame]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.ports :as ports]
+            [hive-cljs.shadow.nrepl :as nrepl]
             [hive-cljs.stub.ports :as stub]
             [hive-dsl.result :as r]))
 
@@ -27,9 +30,9 @@
 ;; =============================================================================
 
 (deftest the-re-frame-dialect-renders-the-step-vocabulary
-  (is (= "(some? @(re-frame.core/subscribe [:user]))"
+  (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
          (re-frame/assertion-source (op :expect-sub [:user] "some?"))))
-  (is (= "(some? (get-in @re-frame.db/app-db [:user]))"
+  (is (= "(some? (get-in (deref re-frame.db/app-db) [:user]))"
          (re-frame/assertion-source (op :expect-db [:user] "some?"))))
   (is (= "(do (re-frame.core/dispatch-sync [:go]) :dispatched)"
          (re-frame/assertion-source (op :dispatch [:go]))))
@@ -46,18 +49,76 @@
     (is (= "(+ 1 2)" (re-frame/assertion-source (op :eval-cljs '(+ 1 2))))))
 
   (testing "a predicate reads as a symbol or a fn form, not only as text"
-    (is (= "(some? @(re-frame.core/subscribe [:user]))"
+    (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
            (re-frame/assertion-source (op :expect-sub [:user] 'some?))))
-    (is (= "((fn [v] (= v \"pedro\")) (get-in @re-frame.db/app-db [:user :name]))"
+    (is (= "((fn [v] (= v \"pedro\")) (get-in (deref re-frame.db/app-db) [:user :name]))"
            (re-frame/assertion-source
             (op :expect-db [:user :name] '(fn [v] (= v "pedro"))))))
-    (is (= "(let [v @(re-frame.core/subscribe [:x])] [(boolean (seq v)) v])"
+    (is (= "(let [v (deref (re-frame.core/subscribe [:x]))] [(boolean (seq v)) v])"
            (re-frame/probe-source (op :wait-for-sub [:x] 'seq)))))
 
   (testing "and the string spelling still works, because #(…) and #\"…\" have no
             EDN form and must stay authorable"
     (is (= (re-frame/assertion-source (op :expect-sub [:user] 'some?))
            (re-frame/assertion-source (op :expect-sub [:user] "some?"))))))
+
+(def ^:private printer-bindings
+  "Every printer-var setting a caller's thread could plausibly carry."
+  (for [ns-maps [true false]
+        length  [nil 0 2]
+        level   [nil 1]
+        meta?   [true false]
+        readably [true false]]
+    {#'*print-namespace-maps* ns-maps
+     #'*print-length*         length
+     #'*print-level*          level
+     #'*print-meta*           meta?
+     #'*print-readably*       readably}))
+
+(def ^:private sample-forms
+  [(list 'when-not (list '= :ok (list :state (list 'plato.fit/verdict-for "welcome")))
+         (list 'throw (list 'ex-info "not ok" {:app/step 1 :app/why [1 2 3 4 5]})))
+   (with-meta '(fn [v] (= v "pedro")) {:line 3})
+   [:user/login {:user/name "pedro" :user/roles #{:admin}}]
+   '(get-in db [:a [:b [:c [:d]]]])])
+
+(deftest a-form-renders-the-same-source-whatever-the-callers-printer-vars
+  ;; pr-str obeys the CALLER's printer vars: *print-length* truncates a vector
+  ;; to (1 2 ...), *print-namespace-maps* rewrites {:a/x 1} as #:a{:x 1},
+  ;; *print-readably* false drops a string's quotes. Each of those changes what
+  ;; the app is asked, so the source must be thread-independent.
+  (let [ops      (concat (map #(op :eval-cljs %) sample-forms)
+                         [(op :expect-sub [:user/current {:user/id 1}] '(fn [v] (= v "pedro")))
+                          (op :expect-db [:a :b :c :d] '(fn [v] (contains? #{:x/y} v)))
+                          (op :dispatch [:user/login {:user/name "pedro"}])])
+        baseline (mapv re-frame/assertion-source ops)]
+    (testing "the baseline is plain readable source"
+      (is (str/includes? (first baseline) "\"welcome\""))
+      (is (str/includes? (first baseline) "{:app/step 1, :app/why [1 2 3 4 5]}"))
+      (is (not (str/includes? (second baseline) "^{")) "no metadata leaks into source"))
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= baseline (mapv re-frame/assertion-source ops))
+            (str "source changed under " (pr-str (update-keys b #(.sym ^clojure.lang.Var %)))))))))
+
+(deftest the-pinned-printer-reads-back-as-the-form-it-printed
+  (doseq [b printer-bindings
+          f sample-forms]
+    (with-bindings b
+      (is (= f (read-string (source/pr-source f)))))))
+
+(deftest a-string-is-the-escape-hatch-and-passes-through-verbatim
+  (doseq [b printer-bindings]
+    (with-bindings b
+      (is (= "#(= % \"pedro\")" (source/form->string "#(= % \"pedro\")")))
+      (is (= "(#(> (count %) 3) (deref (re-frame.core/subscribe [:items])))"
+             (re-frame/assertion-source (op :expect-sub [:items] "#(> (count %) 3)")))))))
+
+(deftest the-js-dialect-also-pins-the-printer
+  (let [base (js/assertion-source (op :expect-state [:user/a 1] "v != null"))]
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= base (js/assertion-source (op :expect-state [:user/a 1] "v != null"))))))))
 
 (deftest the-re-frame-dialect-also-renders-the-javascript-kinds
   ;; A page compiled from ClojureScript is still a page: the stack-agnostic
@@ -83,7 +144,7 @@
   ;; 'never happened' and 'not yet' need different fixes, so the polled form
   ;; yields the value alongside the predicate result.
   (let [src (re-frame/probe-source (op :wait-for-sub [:user] "some?"))]
-    (is (str/includes? src "@(re-frame.core/subscribe [:user])"))
+    (is (str/includes? src "(deref (re-frame.core/subscribe [:user]))"))
     (is (str/includes? src "[(boolean"))))
 
 ;; =============================================================================
@@ -94,9 +155,65 @@
   (let [ce (stub/cljs-eval)]
     (is (ports/runtime-dialect? ce))
     (is (ports/runtime-introspection? ce))
-    (is (= "(some? @(re-frame.core/subscribe [:user]))"
+    (is (= "(some? (deref (re-frame.core/subscribe [:user])))"
            (ports/assertion-source ce (op :expect-sub [:user] "some?")))
         "the channel renders through the same dialect, not one of its own")))
+
+;; =============================================================================
+;; Builders return forms; text appears once, at the edge
+;; =============================================================================
+
+(deftest the-re-frame-builders-return-forms-not-text
+  (is (= '(deref (re-frame.core/subscribe [:user])) (re-frame/sub-form [:user])))
+  (is (= '(re-frame.core/with-frame :f (deref (re-frame.core/subscribe [:user])))
+         (re-frame/sub-form [:user] :f)))
+  (is (= '(deref re-frame.db/app-db) (re-frame/db-root-form)))
+  (is (= '(re-frame.core/app-db-value :f) (re-frame/db-root-form :f)))
+  (is (= '(get-in (deref re-frame.db/app-db) [:a]) (re-frame/db-form [:a])))
+  (is (= '(do (re-frame.core/with-frame :f (re-frame.core/dispatch-sync [:go])) :dispatched)
+         (re-frame/dispatch-form [:go] :f)))
+  (is (= '(let [v x] [(boolean (seq v)) v]) (re-frame/probe-call 'seq 'x)))
+  (is (= '(when-let [e (malli.core/explain app/db (deref re-frame.db/app-db))]
+            (mapv (fn [x] {:path (vec (:in x)) :value (:value x)}) (:errors e)))
+         (re-frame/app-db-invariant-form 'app/db (re-frame/db-root-form))))
+  (is (= {:sub   '(vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub)))
+          :event '(vec (keys (get (deref re-frame.registrar/kind->id->handler) :event)))}
+         (re-frame/registry-map-form [:sub :event])))
+  (is (= '(do (re-frame.core/clear-subscription-cache!)
+              (re-frame.core/reg-sub :a/b (fn [_ _] nil))
+              (re-frame.core/clear-subscription-cache!)
+              :neutralized)
+         (re-frame/neutralize-form :sub :a/b)))
+  (is (= '(js->clj (js/eval "1 + 1")) (re-frame/js-form "1 + 1"))
+      "the JavaScript stays a string: it is the JS dialect's output"))
+
+(deftest a-frame-pinned-step-renders-as-readable-source
+  (is (= '(some? (re-frame.core/with-frame :f (deref (re-frame.core/subscribe [:u]))))
+         (read-string (re-frame/assertion-source
+                       (assoc (op :expect-sub [:u] 'some?) :op/frame :f))))))
+
+(deftest every-new-edge-pins-the-printer
+  (let [edges {:invariant  #(source/pr-source (re-frame/app-db-invariant-form
+                                               'app/db (re-frame/db-root-form :f/x)))
+               :registry   #(source/pr-source (re-frame/registry-map-form [:sub :event]))
+               :neutralize #(source/pr-source (re-frame/neutralize-form :event :a/b))
+               :dispatch   #(re-frame/assertion-source
+                             (assoc (op :dispatch [:a/go {:a/x [1 2 3 4]}]) :op/frame :f))
+               :probe      #(re-frame/probe-source (op :wait-for-db [:a :b :c] 'seq))
+               :js         #(re-frame/assertion-source (op :eval-js "x"))
+               :cljs-eval  #(nrepl/cljs-eval-form :app '(+ 1 2 3 4) "rt-1")
+               :runtimes   #(nrepl/repl-runtimes-form :app)
+               :token      #(source/pr-source nrepl/token-read-form)}
+        baseline (update-vals edges #(%))]
+    (is (= "(shadow.cljs.devtools.api/cljs-eval :app \"(+ 1 2 3 4)\" {:runtime-id \"rt-1\"})"
+           (:cljs-eval baseline)))
+    (is (= "(.-__hiveCljsToken js/window)" (:token baseline)))
+    (is (= "{:sub (vec (keys (get (deref re-frame.registrar/kind->id->handler) :sub))), :event (vec (keys (get (deref re-frame.registrar/kind->id->handler) :event)))}"
+           (:registry baseline)))
+    (doseq [b printer-bindings]
+      (with-bindings b
+        (is (= baseline (update-vals edges #(%)))
+            (str "an edge changed under " (pr-str (update-keys b #(.sym ^clojure.lang.Var %)))))))))
 
 ;; =============================================================================
 ;; Degradation
@@ -135,6 +252,36 @@
 ;; Contrast sampling
 ;; =============================================================================
 
+(defn- node-eval
+  "Evaluate `source` in node against a fake page built by `page-js`, which
+   defines `document`, `window` and `getComputedStyle`. The JSON of the
+   result, or `THROW <message>`. nil when node is not installed."
+  [page-js source]
+  (when (try (zero? (:exit (sh/sh "node" "--version"))) (catch Exception _ false))
+    (let [script (str page-js "\n"
+                      "try { console.log(JSON.stringify(" source ")); }\n"
+                      "catch (e) { console.log('THROW ' + e.message); }\n")
+          res    (sh/sh "node" "-e" script)]
+      (str/trim (:out res)))))
+
+(def ^:private fake-page
+  "A page whose elements are plain objects: `el({...})` gives one, `pages`
+   maps a selector to the elements it matches."
+  "const el = (o) => ({ parentElement: null, textContent: '', clientWidth: 0,
+                        scrollWidth: 0, style: {},
+                        getBoundingClientRect: () => o.r ?? {width:0,height:0,left:0,right:0},
+                        ...o });
+   const box = (l, w, extra = {}) => el({ r: {left:l, right:l+w, width:w, height:10}, ...extra });
+   const pages = {};
+   const window = { innerWidth: 100 };
+   const getComputedStyle = (n) => n.style;
+   const document = {
+     documentElement: el({ style: { backgroundColor: 'rgb(255, 255, 255)', opacity: '1' } }),
+     querySelectorAll: (s) => { if (s.includes(':::')) throw new Error('bad selector');
+                                return pages[s] ?? []; } };")
+
+(defn- on-page [setup source] (node-eval (str fake-page "\n" setup) source))
+
 (deftest the-contrast-probe-asks-the-page-what-it-actually-painted
   (let [source (js/contrast-rows-source
                 [{:id :body :selector "p" :limit 3}
@@ -145,32 +292,48 @@
       (is (str/includes? source "documentElement")
           "and the root is the backstop when no ancestor painted one"))
 
-    (testing "it collects the LAYERS and the opacity, and decides neither"
-      (is (str/includes? source "layers.push(c)")
-          "a translucent card over a dark page is neither of those colours")
-      (is (str/includes? source "opacity *= o")
-          "and a computed colour does not carry the opacity property"))
-
     (testing "each spec reaches the page as the selector it named"
       (is (str/includes? source "\"p\""))
       (is (str/includes? source "\".field input\""))
-      (is (str/includes? source "\"non-text\""))
-      (is (str/includes? source "spec.limit")))
+      (is (str/includes? source "\"non-text\"")))
 
     (testing "only :non-text is asserted; text is classified from its size"
-      (is (str/includes? source "role:null")
+      (is (str/includes? source "\"role\": null")
           "a page that stamped 'text' on a heading would raise its bar")
-      (is (str/includes? source "cs.fontSize"))
-      (is (str/includes? source "fontWeight")))
+      (is (str/includes? source "fontSize"))
+      (is (str/includes? source "fontWeight"))))
 
-    (testing "what would be a false failure is skipped, not reported"
-      (is (str/includes? source "=== 'none'")
-          "an element with no border has no edge to measure")
-      (is (str/includes? source "textContent")
-          "and an empty node has no text to read"))
-
-    (testing "rows are positional, so no key spelling crosses the host boundary"
-      (is (str/includes? source "out.push([")))))
+  (testing "on a page"
+    (when-let [out (on-page
+                    "const solid = el({ style: { backgroundColor: 'rgb(1, 2, 3)', opacity: '0.5' } });
+                     const card = el({ parentElement: solid,
+                                       style: { backgroundColor: 'rgba(0, 0, 0, 0.5)', opacity: '0.8' } });
+                     const page = el({ parentElement: card,
+                                       style: { backgroundColor: 'rgb(10 20 30 / 0.5)', opacity: '1' } });
+                     const text = (t, w, parent) => el({ textContent: t, parentElement: parent,
+                       style: { color: 'red', fontSize: '16px', fontWeight: w,
+                                backgroundColor: 'rgba(0,0,0,0)', opacity: '1' } });
+                     const edge = (w, st) => el({ parentElement: card,
+                       style: { borderTopWidth: w, borderTopStyle: st, borderTopColor: 'green', opacity: '1' } });
+                     pages['p'] = [text(' hi ', '700', page), text('  ', '400', page),
+                                   text('x', '400', null), text('y', '400', null)];
+                     pages['.field input'] = [edge('2px', 'solid'), edge('0px', 'solid'), edge('2px', 'none')];"
+                    (js/contrast-rows-source
+                     [{:id :body :selector "p" :limit 3}
+                      {:id :field :selector ".field input" :role :non-text}]))]
+      (testing "it collects the LAYERS and the opacity, and decides neither"
+        (is (str/includes?
+             out "[\"body-0\",\"red\",[\"rgb(10 20 30 / 0.5)\",\"rgba(0, 0, 0, 0.5)\",\"rgb(1, 2, 3)\"],null,16,true,0.8]")
+            "a translucent card over a dark page is neither of those colours,
+             and a computed colour does not carry the opacity property"))
+      (testing "the root is the backstop, and the limit is honoured"
+        (is (str/includes? out "[\"body-2\",\"red\",[\"rgb(255, 255, 255)\"],null,16,false,1]"))
+        (is (not (str/includes? out "body-3"))))
+      (testing "what would be a false failure is skipped, not reported"
+        (is (not (str/includes? out "body-1")) "an empty node has no text to read")
+        (is (str/includes? out "[\"field-0\",\"green\",[\"rgba(0, 0, 0, 0.5)\",\"rgb(1, 2, 3)\"],\"non-text\",null,false,0.8]"))
+        (is (not (str/includes? out "field-1")) "a zero-width border has no edge")
+        (is (not (str/includes? out "field-2")) "nor has a border styled none")))))
 
 (deftest a-border-side-reaches-the-page-as-a-property-that-exists
   (testing "a keyword side is spelled the way computed style spells it"
@@ -178,59 +341,77 @@
                               "Top" "Top" "left" "Left" nil "Top"}]
       (is (str/includes? (js/contrast-rows-source
                           [{:id :e :selector ".x" :role :non-text :side given}])
-                         (str "side:\"" expected "\""))
+                         (str "\"side\": \"" expected "\""))
           (str (pr-str given) " must not emit a property nothing answers to")))))
 
 (deftest one-bad-selector-is-one-bad-spec
   (let [source (js/contrast-rows-source
                 [{:id :bad :selector "p:::nope"} {:id :good :selector "p"}])]
-    (is (str/includes? source "catch (e)")
+    (is (str/includes? source "catch (")
         "a selector the browser rejects must not abort every other spec")
-    (is (str/includes? source "-selector")
-        "it is reported as one unresolvable row instead")))
+    (when-let [out (on-page "pages['p'] = [el({ textContent: 'x',
+                               style: { color: 'red', fontSize: '10px', fontWeight: '400', opacity: '1' } })];"
+                            source)]
+      (is (str/starts-with? out "[[\"bad-selector\",null,null,null,null,false,1],[\"good-0\"")
+          "it is reported as one unresolvable row instead"))))
 
 (deftest a-selector-cannot-smuggle-source-into-the-page
   (let [source (js/contrast-rows-source
                 [{:id :evil :selector "a\"); alert(1); //"}])]
     (testing "the payload survives, INSIDE the string literal it was given as"
-      (is (str/includes? source "selector:\"a\\\"); alert(1); //\"")
+      (is (str/includes? source "\"selector\": \"a\\\"); alert(1); //\"")
           "the quote that would close the literal is escaped, so the rest of
            the selector stays data"))
 
     (testing "and it never appears unescaped, which is what breaking out means"
-      (is (not (str/includes? source "selector:\"a\");"))))))
+      (is (not (str/includes? source "\"selector\": \"a\");"))))))
 
 (deftest expect-fits-asks-one-named-question-instead-of-a-copied-predicate
   ;; The manifest that motivated this carried the same overflow predicate six
   ;; times, once per viewport, because a viewport is per scenario. A step kind
   ;; makes the SELECTOR the only thing that varies.
   (let [source (js/assertion-source (op :expect-fits ".card"))]
+    (is (= source (js/fits-source ".card")))
     (testing "the selector reaches the page as data, inside its own literal"
-      (is (str/includes? source "const sel = \".card\";")))
+      (is (str/includes? source "querySelectorAll(\".card\")")))
 
     (testing "rectangles, because an inline element reports scrollWidth 0 and
               `scrollWidth <= clientWidth` is then 0 <= 0 on every input"
       (is (str/includes? source "getBoundingClientRect")))
 
-    (testing "so the self-clip half is asked only of elements that have a box"
-      (is (str/includes?
-           source
-           "el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol")))
+    (testing "on a page"
+      (let [fits (fn [setup] (on-page setup source))]
+        (when (fits "")
+          (testing "all fit: the number measured"
+            (is (= "2" (fits "pages['.card'] = [box(0, 50), box(10, 20, {clientWidth: 20, scrollWidth: 20})];")))
+            (is (= "1" (fits "pages['.card'] = [box(0, 101)];"))
+                "within the tolerance"))
+          (testing "an overflow answers false, which the runtime channel fails on"
+            (is (= "false" (fits "pages['.card'] = [box(0, 50), box(80, 30)];")))
+            (is (= "false" (fits "pages['.card'] = [box(-5, 50)];"))))
+          (testing "the self-clip half is asked only of elements that have a box"
+            (is (= "false" (fits "pages['.card'] = [box(0, 50, {clientWidth: 50, scrollWidth: 60})];")))
+            (is (= "1" (fits "pages['.card'] = [box(0, 50), el({})];"))
+                "an inline element, 0 <= 0, is neither measured nor a pass by itself"))
+          (testing "nothing measurable THROWS — a gate that could not look must
+                    never read as a gate that looked and was happy"
+            (is (= "THROW expect-fits: nothing matches .card" (fits "")))
+            (is (= "THROW expect-fits: 2 element(s) match .card and none has a rectangle"
+                   (fits "pages['.card'] = [el({}), el({})];")))))))))
 
-    (testing "nothing measurable THROWS — a gate that could not look must never
-              read as a gate that looked and was happy"
-      (is (str/includes? source "throw new Error('expect-fits: nothing matches ' + sel)"))
-      (is (str/includes? source "none has a rectangle")))
-
-    (testing "an overflow answers false, which the runtime channel fails on"
-      (is (str/includes? source "return over ? false : measured;")))))
+(deftest expect-fits-needs-no-probe-installed
+  (is (not (str/includes? (js/fits-source ".card") "__hive__"))
+      "a fit gate runs on any page, not only one the probe was injected into"))
 
 (deftest a-fits-selector-cannot-smuggle-source-into-the-page
   (let [source (js/fits-source "a\"); alert(1); //")]
-    (is (str/includes? source "const sel = \"a\\\"); alert(1); //\";")
+    (is (str/includes? source "querySelectorAll(\"a\\\"); alert(1); //\")")
         "the quote that would close the literal is escaped, so the rest stays data")
-    (is (not (str/includes? source "const sel = \"a\");"))
-        "and it never appears unescaped, which is what breaking out means")))
+    (is (not (str/includes? source "\"a\");"))
+        "and it never appears unescaped, which is what breaking out means")
+    (when-let [out (on-page "" source)]
+      (is (= "THROW expect-fits: nothing matches a\"); alert(1); //" out)
+          "the page sees the selector as one string"))))
 
 (deftest a-page-is-a-page-whatever-compiled-it
   ;; The same argument the JavaScript kinds already carry: a shadow-cljs app

@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Inbox</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="app.js"></script>
+    <script>
+      const app = Elm.Main.init({ node: document.getElementById('root') });
+      // The only hive-cljs line in the app. The probe is injected before any
+      // page script during a scenario; everywhere else the guard skips it.
+      // NOT `subscribe(window.__hive__?.pushed('model'))`: without the probe
+      // that subscribes `undefined`, and every later port send throws
+      // "currentSubs[i] is not a function".
+      if (window.__hive__) app.ports.hiveState.subscribe(window.__hive__.pushed('model'));
+    </script>
+  </body>
+</html>

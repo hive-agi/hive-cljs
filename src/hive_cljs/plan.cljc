@@ -6,9 +6,11 @@
   (:require [clojure.string :as str]
             [hive-cljs.manifest :as manifest]
             [hive-cljs.schema :as s]
+            [hive-cljs.selector :as selector]
             [hive-cljs.step :as step]
             [hive-dsl.result :as r]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [hive-cljs.http :as http]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -31,6 +33,20 @@
             op))
         ops))
 
+(defn compile-iframe
+  "Result of `session` with its `:iframe` compiled to the selector string the
+   browser reads. The manifest may author it as a string or as selector DATA
+   (`hive-cljs.selector`); this is the ONE place it is compiled, so the
+   adapter only ever sees a string. A malformed one is the plan's
+   `:selector/malformed` error, tagged `:at :iframe`."
+  [session]
+  (if-let [sel (:iframe session)]
+    (let [res (selector/compile-selector sel)]
+      (if (r/ok? res)
+        (r/ok (assoc session :iframe (:ok res)))
+        (assoc res :key :iframe)))
+    (r/ok session)))
+
 (defn session-opts
   "Browser session options for a run."
   [manifest]
@@ -42,11 +58,11 @@
              :ignore-https-errors (boolean (:ignore-https-errors e2e))
              :artifacts-dir (:artifacts-dir e2e)}
       (:viewport e2e) (assoc :viewport (:viewport e2e))
-      (:iframe e2e)   (assoc :iframe (:iframe e2e)))))
+      (:iframe e2e)   (assoc :iframe (:iframe e2e))
+      (:window-class e2e) (assoc :window-class (:window-class e2e)))))
 
 (defn launch-args
-  "The browser switches a scenario runs with: its own when it declares any,
-   even an empty vector, else the manifest's."
+  "A scenario's switches replace the manifest's, including an empty vector."
   [manifest-args scenario]
   (if (contains? scenario :launch-args)
     (:launch-args scenario)
@@ -91,14 +107,23 @@
    e2e :frame) is stamped onto runtime ops so re-frame2 frame-scoped apps get
    frame-pinned subscribe/dispatch/db reads. A scenario's platform/context
    options, viewport, and iframe each override the manifest-wide values for
-   that run's session."
+   that run's session.
+
+   Every `:http` op is checked against the manifest's `:http-allow` HERE, so a
+   request to a host the manifest does not list is the plan's
+   `:http/host-not-allowed` error and never reaches the harness's channel."
   ([manifest scenario] (build-plan step/default-rules manifest scenario))
   ([rules manifest scenario]
    (let [base-url (scenario-base-url manifest scenario)
          compiled (step/compile-steps rules (:steps scenario))
+         allowed  (when (r/ok? compiled)
+                    (http/check-ops (get-in manifest [:manifest/e2e :http-allow] [])
+                                    (:ok compiled) step/assertion-op?))
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
-         session  (cond-> (assoc (session-opts manifest) :base-url base-url)
+         args     (launch-args (get-in manifest [:manifest/e2e :launch-args]) scenario)
+         session  (compile-iframe
+                   (cond-> (assoc (session-opts manifest) :base-url base-url)
                     (:browser scenario) (assoc :browser (:browser scenario))
                     (:viewport scenario) (assoc :viewport (:viewport scenario))
                     (:user-agent scenario) (assoc :user-agent (:user-agent scenario))
@@ -106,14 +131,16 @@
                     (contains? scenario :has-touch) (assoc :has-touch (:has-touch scenario))
                     (:device-scale-factor scenario)
                     (assoc :device-scale-factor (:device-scale-factor scenario))
-                    (:iframe scenario) (assoc :iframe (:iframe scenario)))
-         session  (let [args (launch-args (get-in manifest [:manifest/e2e :launch-args]) scenario)]
-                    (if (seq args) (assoc session :launch-args args) session))]
-     (if (r/err? compiled)
-       compiled
+                    (:iframe scenario) (assoc :iframe (:iframe scenario))
+                    (seq args) (assoc :launch-args args)))]
+     (cond
+       (r/err? compiled) compiled
+       (r/err? allowed)  (assoc allowed :scenario (:id scenario))
+       (r/err? session)  session
+       :else
        (r/ok (cond-> {:plan/scenario (:id scenario)
                       :plan/base-url base-url
-                      :plan/session  session
+                      :plan/session  (:ok session)
                       :plan/runtime  (runtime-opts manifest frame)
                       :plan/ops      (cond->> (resolve-urls base-url (:ok compiled))
                                        frame (mapv #(if (= :runtime (:op/channel %))
@@ -159,6 +186,7 @@
 
 (m/=> absolutize [:=> [:cat s/NonBlankString s/NonBlankString] s/NonBlankString])
 (m/=> session-opts [:=> [:cat s/Manifest] [:map-of :keyword :any]])
+(m/=> compile-iframe [:=> [:cat [:map-of :keyword :any]] :any])
 (m/=> scenario-base-url [:=> [:cat s/Manifest s/Scenario] s/NonBlankString])
 (m/=> channels-used [:=> [:cat s/RunPlan] [:set s/OpChannel]])
 (m/=> needs-runtime? [:=> [:cat s/RunPlan] :boolean])

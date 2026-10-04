@@ -4,12 +4,14 @@ A scenario is a vector of step vectors. The head keyword is the step kind; the
 rest are its arguments. Steps are **data** — they compile to port-neutral ops
 before anything touches a browser.
 
-Each step is routed to one of two channels:
+Each step is routed to one of three channels:
 
 - **browser** → `IBrowserDriver` (Playwright): the DOM
 - **runtime** → `ICljsEval` (shadow cljs-eval over nREPL): the running app
+- **http** → `IHttpChannel` (the JDK HTTP client): the harness itself, acting
+  out of band; see [HTTP steps](#http-steps-the-harness-acts-out-of-band)
 
-One scenario mixes both freely. That is the point: `:expect-text` proves what the
+One scenario mixes them freely. That is the point: `:expect-text` proves what the
 user sees, `:expect-sub` proves what the app believes.
 
 Both channels address the page the session opened. When the application under
@@ -17,6 +19,65 @@ test is rendered inside an iframe (a slide player, a preview pane, an embedded
 editor), point `:iframe` at it and every selector and expression below resolves
 in that document instead: see
 [configuration.md](configuration.md#iframe-when-the-application-under-test-is-a-child-document).
+
+## Selectors are data
+
+Every step argument named "selector" below (and `:expect-fits`, the `:iframe`
+option, and the selector arguments of the `dom/` probe functions) is **selector
+data**, which `hive-cljs.selector` compiles while the step compiles:
+
+| Data | Compiles to |
+|---|---|
+| `:#go` / `:li.row.active` | `#go` / `li.row.active` |
+| `{:role "tablist"}` | `[role="tablist"]` |
+| `{:data-testid/prefix "p-"}` | `[data-testid^="p-"]` (also `/suffix` `/contains` `/word`) |
+| `{:disabled true}` | `[disabled]` |
+| `[:li {:has-text "X"} [:button {:data-testid "ok"}]]` | `li:has-text("X") button[data-testid="ok"]`; nesting means descendant |
+| `[:> :nav :a]` / `[:in :main :button]` / `[:or :#a :.b]` | `nav > a` / `main button` / `:is(#a, .b)` |
+| `[:li {:has :button.del :not :.done}]` | `li:has(button.del):not(.done)` |
+
+`:has-text`, `:text-is` and `:visible` are Playwright pseudo-classes. They are
+refused in `:expect-fits` and in the `dom/` functions of a
+[probe form](#probe-forms), because those run the page's own
+`querySelectorAll`.
+
+`:iframe` takes selector data as well, on the e2e config or on one scenario:
+`:iframe [:in :hyperframes-player :iframe]`. See
+[configuration.md](configuration.md#iframe-when-the-application-under-test-is-a-child-document).
+
+Helpers return data, so they compose: `testid`, `testid-prefix`, `role`,
+`within`, `child-of`, `any-of`, `with-text`. `defselector` names a selector
+and compiles a literal one when the namespace loads:
+
+```clojure
+(require '[hive-cljs.selector :as sel])
+(sel/defselector proposal [:li {:data-testid/prefix "site-proposta-"}])
+[:click (sel/within (sel/with-text proposal "X") (sel/testid :button "aprovar"))]
+```
+
+A malformed selector (`[:li :a :b]`, `{}`, `42`) is a `:selector/malformed`
+error when the plan compiles, and carries `:problem`. It never reaches the
+browser, so it cannot turn into a timeout.
+
+## Strings are the escape hatch
+
+Selectors, probes and predicates are written as Clojure data throughout this
+reference. A string is still accepted everywhere one of them is, and is passed
+through **verbatim**: a selector string goes to Playwright as written, a
+`:*-js` / `:*-state` string is JavaScript, an `:eval-cljs` / `:expect-sub` /
+`:expect-db` string is ClojureScript source.
+
+Reach for a string only when the data cannot say it:
+
+- a Playwright engine the selector data has no form for (`"text=Sign in"`,
+  `"role=button[name=\"OK\"]"`, `>>` chains);
+- JavaScript the probe language does not cover (statements, `new`, `await`,
+  operators it has no head for);
+- a ClojureScript reader macro EDN cannot carry, such as a regex `#"^p"`.
+
+A string is not checked at plan time, so a typo in one surfaces in the page,
+not when the plan compiles. That is the price, and the reason it is not the
+default.
 
 ## Browser steps
 
@@ -32,35 +93,40 @@ in that document instead: see
 
 | Step | Does |
 |---|---|
-| `[:click "#go"]` | click a selector |
-| `[:fill "#user" "pedro"]` | set an input's value |
-| `[:select "#country" "BR"]` | choose an option |
-| `[:check "#agree"]` | check a checkbox |
-| `[:press "#user" "Enter"]` | press a key on an element |
-| `[:hover "#menu"]` | hover |
+| `[:click :#go]` | click a selector |
+| `[:fill :#user "pedro"]` | set an input's value |
+| `[:select :#country "BR"]` | choose an option |
+| `[:check :#agree]` | check a checkbox |
+| `[:press :#user "Enter"]` | press a key on an element |
+| `[:hover :#menu]` | hover |
 
 ### Synchronisation
 
 | Step | Does |
 |---|---|
-| `[:wait-for "#chart"]` | wait for a selector to appear |
+| `[:wait-for :#chart]` | wait for a selector to appear |
 | `[:wait-ms 250]` | fixed pause — a last resort |
 
 ### DOM assertions
 
 | Step | Passes when |
 |---|---|
-| `[:expect-text "#hi" "Hello"]` | element's text CONTAINS the expected string |
-| `[:expect-value "#user" "pedro"]` | input's value equals exactly |
-| `[:expect-visible "#chart"]` | element is visible |
-| `[:expect-hidden "#hi"]` | element is absent or hidden |
-| `[:expect-count ".row" 3]` | selector matches exactly N elements |
-| `[:expect-attr "#menu" "aria-expanded" "true"]` | attribute equals exactly |
+| `[:expect-text :#hi "Hello"]` | element's text CONTAINS the expected string |
+| `[:expect-value :#user "pedro"]` | input's value equals exactly |
+| `[:expect-visible :#chart]` | element is visible |
+| `[:expect-hidden :#hi]` | element is absent or hidden |
+| `[:expect-count :.row 3]` | selector matches exactly N elements |
+| `[:expect-attr :#menu "aria-expanded" "true"]` | attribute equals exactly |
 | `[:expect-url "/dashboard"]` | current URL CONTAINS the expected string |
+| `[:expect-no-errors]` | no console error was logged and no uncaught page error thrown since the page opened |
+| `[:expect-no-errors {:ignore ["favicon"] :sources #{:pageerror}}]` | same, excusing errors containing a substring or restricted to one source |
 
 `:expect-attr` distinguishes an **absent** attribute from one holding the wrong
 value, because they are different mistakes: `no such attribute` is a selector or
 a spelling to fix, a wrong value is the application to fix.
+
+`:expect-no-errors` options are data, never JS: `:sources` is a set of
+`:console`/`:pageerror` (default both), `:ignore` a vector of substrings.
 
 ### Artifacts
 
@@ -100,16 +166,16 @@ inherited when the project has one build).
 |---|---|
 | `[:eval-cljs (+ 1 2)]` | the form; passes if it returns without error |
 | `[:dispatch [:login "pedro"]]` | `(re-frame.core/dispatch-sync [:login "pedro"])` |
-| `[:expect-sub [:current-user] "some?"]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
-| `[:expect-db [:user :name] "some?"]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
-| `[:wait-for-sub [:selected] "some?"]` | the same, polled until it holds |
-| `[:wait-for-db [:items] "seq"]` | the same, polled until it holds |
+| `[:expect-sub [:current-user] some?]` | `(some? @(re-frame.core/subscribe [:current-user]))` |
+| `[:expect-db [:user :name] some?]` | `(some? (get-in @re-frame.db/app-db [:user :name]))` |
+| `[:wait-for-sub [:selected] some?]` | the same, polled until it holds |
+| `[:wait-for-db [:items] seq]` | the same, polled until it holds |
 
-#### A form is the preferred spelling; a string is the escape hatch
+#### Arguments are forms
 
-The manifest is EDN, so a step argument can simply **be** the form. Prefer that:
-a source string costs escaping, editor support, linting and indexing, and a typo
-inside one ships as a runtime error rather than failing to read.
+The manifest is EDN, so a step argument simply **is** the form. A source string
+would cost escaping, editor support, linting and indexing, and a typo inside one
+ships as a runtime error rather than failing to read.
 
 ```clojure
 [:eval-cljs (my.app/reset!)]                       ; a form
@@ -117,13 +183,21 @@ inside one ships as a runtime error rather than failing to read.
 [:expect-db [:user :name] (fn [v] (= v "pedro"))]  ; a fn form
 ```
 
-Strings keep working, and stay the right answer for the two things EDN cannot
-represent: `"#(= % \"pedro\")"` and `"#\"^p\""`. Everything else reads better as
-data, which is why `:dispatch` has always taken `[:login "pedro"]` rather than
-text.
+EDN has no `#(…)` or `#"…"` reader macros, so write `(fn [u] (= u "pedro"))`
+rather than `#(= % "pedro")`. A regex has no EDN spelling at all; that is one
+of the few places a string is still needed (see
+[Strings are the escape hatch](#strings-are-the-escape-hatch)). `:dispatch` has
+always taken `[:login "pedro"]` rather than text for the same reason.
 
-The predicate is rendered as source either way, so any expression works:
-`some?`, `string?`, `"#(> (count %) 3)"`.
+A form is printed with `pr-str` under **pinned** printer vars
+(`*print-namespace-maps*` false, `*print-length*` and `*print-level*` nil,
+`*print-meta*` false, `*print-readably*` true), so the source sent to the app is
+the same whatever bindings the calling thread carries: a REPL with
+`*print-length*` set cannot truncate `[1 2 3 4]` into `[1 2 ...]`, and
+`{:user/id 1}` never arrives as `#:user{:id 1}`. A string is sent verbatim.
+
+The predicate is applied to the value, so any one-argument function works:
+`some?`, `string?`, `(fn [xs] (> (count xs) 3))`.
 
 `:expect-sub` and `:expect-db` are **assertions** — a `false` or `nil` result
 fails the step. `:eval-cljs` and `:dispatch` are **actions** — they pass unless
@@ -137,9 +211,12 @@ runtime to configure and no `:nrepl-port` to set.
 
 | Step | Evaluates |
 |---|---|
-| `[:eval-js "window.app.reset()"]` | the expression; passes unless it throws |
-| `[:expect-js "document.title === 'Inbox'"]` | the expression as an assertion |
-| `[:wait-for-js "window.store.getState().ready"]` | the same, polled until it holds |
+| `[:eval-js (.reset js/window.app)]` | the expression; passes unless it throws |
+| `[:expect-js (= js/document.title "Inbox")]` | the expression as an assertion |
+| `[:wait-for-js (.-ready (.getState js/window.store))]` | the same, polled until it holds |
+
+The argument is a **probe form**, rendered to one JavaScript expression; see
+[Probe forms](#probe-forms) below for what it may contain.
 
 `:expect-js` uses **JavaScript** truthiness, so `0`, `""`, `null`, `undefined`
 and `NaN` all fail the step. A passing assertion reports the value it saw rather
@@ -150,15 +227,55 @@ come first — otherwise there is no application to ask:
 
 ```clojure
 [[:goto "/"]
- [:click "#load"]
- [:wait-for-js "window.__elmModel.items.length > 0"]
- [:expect-js "document.querySelectorAll('.item').length === 3"]]
+ [:click :#load]
+ [:wait-for-js (> (count (.-items js/window.__elmModel)) 0)]
+ [:expect-js (= 3 (dom/count :.item))]]
 ```
 
 How an app exposes its state to that first expression is the app's business: an
 Elm port writing to `window`, a Redux store, a Svelte store, a signal. Nothing
 here reaches into a framework's internals — which is exactly why it works for
 all of them.
+
+#### Probe forms
+
+The argument to `:eval-js`, `:expect-js` and `:wait-for-js` (and the predicate
+of `:expect-state` / `:wait-for-state`) is a **form**.
+`hive-cljs.dialect.probe` renders it to one JavaScript expression, so a manifest
+carries no JS blobs:
+
+```clojure
+[:wait-for-js (= 1 (dom/count [:in :#welcome :.fragment.visible]))]
+[:expect-js   (every? dom/visible? (dom/all [:in :#main {:data-composition-id true}]))]
+[:expect-js   (>= (count (keys (.-__timelines js/window))) 16)]
+[:expect-js   (let [tl (get (.-__timelines js/window) "animation")]
+                (.seek tl 3)
+                (= 3 (.time tl)))]
+[:expect-state ["model" "loading"] (= v false)]   ; v is the value read
+[:expect-state ["model" "user"] some?]            ; a function is applied to it
+```
+
+| Group | Forms |
+|---|---|
+| DOM | `dom/one` `dom/all` `dom/count` (each `(sel)` or `(root sel)`), `dom/text` `dom/attr` `dom/style` `dom/visible?` `dom/matches?` `dom/has-class?` (element or selector) |
+| core | `=` `not=` `<` `>` `<=` `>=` `+` `-` `*` `/` `mod` `inc` `dec` `min` `max` `and` `or` `not` `if` `when` `cond` `do` `let` `fn` `nil?` `some?` `true?` `false?` `string?` `number?` `count` `empty?` `first` `last` `nth` `keys` `vals` `get` `get-in` `aget` `contains?` `str` `every?` `some` `filter` `remove` `map` |
+| strings | `str/includes?` `str/starts-with?` `str/ends-with?` `str/trim` `str/lower-case` `str/upper-case` `str/blank?` `str/join` |
+| interop | `(.method obj args…)`, `(.-prop obj)`, `js/name`; `window`, `document`, `Math`, `JSON` and a few other globals need no prefix |
+
+JavaScript semantics where they differ: `=` is `===` (two arrays are never
+equal; compare `(str/join "," xs)` instead) and truthiness is JS truthiness.
+`get`/`get-in` are nil-safe. The language is closed: an unknown function or an
+unbound symbol fails the **plan** with `:step/malformed`, before a browser opens,
+rather than reaching the page as a `ReferenceError`. A string is still accepted
+verbatim, as the escape hatch for anything the forms cannot say.
+
+Every selector argument of a `dom/` function is [selector data](#selectors-are-data)
+too, compiled while the plan compiles. Because the page itself runs it with
+`querySelector`, it is compiled as plain CSS: the Playwright-only `:has-text`,
+`:text-is` and `:visible` are refused there, exactly as in `:expect-fits`.
+
+Combined with `:iframe`, `document` is already the child document, so a probe
+needs no prelude to find it.
 
 Two things the JavaScript channel deliberately cannot do, both of which report
 rather than pretend: the `:app-db-schema` invariant, and `cljs e2e mutate`'s
@@ -184,13 +301,14 @@ run at read time, once per assertion.
 
 | Step | Reads |
 |---|---|
-| `[:expect-state ["model" "user" "name"] "v !== null"]` | `window.__hive__.read(["model","user","name"])` |
-| `[:wait-for-state ["model" "loading"] "v === false"]` | the same, polled until it holds |
+| `[:expect-state ["model" "user" "name"] (some? v)]` | `window.__hive__.read(["model","user","name"])` |
+| `[:wait-for-state ["model" "loading"] (= v false)]` | the same, polled until it holds |
 
 The first path segment names the exposed source; the rest indexes into it, and
-integer segments index arrays (`["model" "items" 0 "id"]`). `v` in the predicate
-is the value that was read, and a passing assertion reports that value rather
-than a bare `true`.
+integer segments index arrays (`["model" "items" 0 "id"]`). The predicate is a
+[probe form](#probe-forms): `v` in it is the value that was read, and a function
+such as `some?` or `(fn [x] (> x 2))` is applied to that value. A passing assertion reports that value rather than
+a bare `true`.
 
 This is the counterpart of `:expect-sub` for stacks that are not re-frame — same
 shape, same debugging property: `:expect-text` red while `:expect-state` green
@@ -209,7 +327,7 @@ subscriber and exposes the latest value it received — the same shape for a
 websocket or any other push source:
 
 ```js
-app.ports.hiveState.subscribe(window.__hive__?.pushed('model'))
+if (window.__hive__) app.ports.hiveState.subscribe(window.__hive__.pushed('model'))
 ```
 
 Values cross a structured-clone boundary, so they are projected to JSON shapes:
@@ -225,14 +343,14 @@ than an expression each manifest re-authors:
 
 ```clojure
 [[:goto "/certificado"]
- [:wait-for "main"]
- [:expect-fits "main"]
- [:expect-fits "h1"]]
+ [:wait-for :main]
+ [:expect-fits :main]
+ [:expect-fits :h1]]
 ```
 
 | Step | Passes when |
 |---|---|
-| `[:expect-fits "main"]` | every element the selector matches stays inside its box |
+| `[:expect-fits :main]` | every element the selector matches stays inside its box |
 
 Two questions, because an element can overflow in two directions and only one of
 them shows up in a scroll size. It must sit inside the **viewport**
@@ -253,7 +371,7 @@ Three answers, and the third is the point:
 | something overflows | `false`, which fails the step |
 | nothing was measurable | throws: the selector matched nothing, or matched only elements with no rectangle |
 
-That last row is why this is not `[:expect-js "…querySelectorAll…"]` with a
+That last row is why this is not `[:expect-js (dom/count …)]` with a
 count of zero: a gate that could not look must never read as a gate that looked
 and was happy.
 
@@ -261,23 +379,23 @@ Pair it with a per-scenario `:viewport` to ask the same question at several
 widths; the selector is then the only thing that varies:
 
 ```clojure
-{:id :phone   :viewport {:width 390 :height 844}  :steps [[:goto "/"] [:expect-fits "main"]]}
-{:id :desktop :viewport {:width 1440 :height 900} :steps [[:goto "/"] [:expect-fits "main"]]}
+{:id :phone   :viewport {:width 390 :height 844}  :steps [[:goto "/"] [:expect-fits :main]]}
+{:id :desktop :viewport {:width 1440 :height 900} :steps [[:goto "/"] [:expect-fits :main]]}
 ```
 
 ### Condition-waits on state
 
 `:wait-for` waits on the DOM; `:wait-for-sub` and `:wait-for-db` wait on what the
-app *believes*. They take the same predicate strings as the matching `:expect-*`,
+app *believes*. They take the same predicate forms as the matching `:expect-*`,
 poll every `:poll-ms` (default 250) until `:timeout-ms`, and pass the moment the
 predicate holds.
 
 Reach for one whenever an assertion follows an async mutation:
 
 ```clojure
-[:click "#save"]
-[:wait-for-sub [:selected] "some?"]        ; not [:wait-ms 2500]
-[:expect-sub [:selected] "#(= \"active\" (:status %))"]
+[:click :#save]
+[:wait-for-sub [:selected] some?]        ; not [:wait-ms 2500]
+[:expect-sub [:selected] (fn [s] (= "active" (:status s)))]
 ```
 
 A fixed pause is a guess about a machine you are not running on: it passes warm
@@ -291,6 +409,93 @@ condition never held within 15000ms — last value {:status "pending"}
 
 Waiting on a DOM element as a proxy for state only works when a suitable element
 happens to exist. These need none.
+
+## HTTP steps: the harness acts out of band
+
+Some actors are not the user: a payment provider confirming a charge, a
+regtest node mining a block, a fake clock moving forward. Driving them through
+a hosted helper page costs a `:goto` to another origin, and that discards the
+page the runtime channel is pinned to, so every later `:expect-sub` is gone.
+An HTTP step is made by the **harness**, not the browser: the page stays where
+it is and state assertions keep working to the end of the scenario.
+
+```clojure
+:hive.cljs/e2e
+{:http-allow ["localhost:12345" "localhost:18443"]
+ :scenarios
+ [{:id :pay-by-card
+   :steps [[:goto "/checkout"]
+           [:click :#pay]
+           [:wait-for-sub [:order :invoice] some?]
+           [:http {:method :post
+                   :url    "http://localhost:12345/v1/charges/confirm"
+                   :headers {:authorization "Bearer sk_test"}
+                   :body   {:invoice "inv-1" :amount 500}
+                   :as     :json}]
+           [:expect-http {:status 200 :body-includes {:paid true}}]
+           [:wait-for-sub [:order :status] (fn [s] (= s :paid))]
+           [:expect-text :#status "Paid"]]}]}
+```
+
+| Step | Does |
+|---|---|
+| `[:http {:url "http://host:port/path" …}]` | the harness sends the request; its response becomes the run's **last response** |
+| `[:expect-http {:status 200 …}]` | asserts on the last response |
+
+`:http` takes one map, validated when the plan compiles (closed: an unknown key
+is `:step/malformed`):
+
+| Key | |
+|---|---|
+| `:url` | required; ABSOLUTE `http`/`https`, plain host (no userinfo, no IPv6 literal) |
+| `:method` | `:get` (default) `:post` `:put` `:patch` `:delete` `:head` `:options` |
+| `:headers` | name → value; names are lower-cased |
+| `:body` | a string is sent verbatim; any other value is encoded as JSON with `content-type: application/json` unless you set one |
+| `:as` | `:json` decodes the response body to EDN (keyword keys) for `:expect-http`; `:text` (default) keeps it a string |
+| `:timeout-ms` | per request; defaults to the e2e `:timeout-ms` |
+
+`:expect-http` takes one map; every key present must hold:
+
+| Key | Holds when |
+|---|---|
+| `:status` | equals the int, or is a member of a set `#{200 201}` |
+| `:body-includes` | the decoded body INCLUDES the data: maps by key subset (extra keys fine), vectors element by element, scalars by value, numbers numerically |
+| `:body-contains` | the raw body text contains the substring |
+| `:headers` | each named header has exactly that value |
+
+A failure names every mismatch, with the path into the body:
+`status 402, expected 200; body at [:paid]: expected true, got false`.
+
+**Semantics.** `:http` is an *action*: any status is a request that happened
+(`:pass`, the detail records `post <url> → 402`), so judging the answer is
+`:expect-http`'s job. No response at all (connection refused, timeout) is an
+`:error`, as is a body that `:as :json` cannot parse. With no HTTP channel
+connected the step is `:incomplete`. Redirects are not followed, so a 3xx is
+judged, never silently chased to another host. `:expect-http` is an
+**assertion that only observes**, declared on its op (`:op/assert? true
+:op/read-only? true`), and an `:http` op is not read-only, so a `:mutations`
+app-db invariant runs after it.
+
+### The allowlist is the escape-hatch control
+
+The HTTP channel could address anything, so it is closed by default.
+`:http-allow` in `:hive.cljs/e2e` lists the `host:port` authorities a plan may
+address, always with the port (`"localhost:12345"`; a scheme default is spelled
+`"example.test:443"`). Checked when the **plan** is built, before a browser
+opens:
+
+```clojure
+[:http {:url "http://localhost:9999/pay"}]
+; => :http/host-not-allowed {:index 2 :authority "localhost:9999"
+;      :allowed ["localhost:12345"] :hint "add \"localhost:9999\" to :hive.cljs/e2e :http-allow"}
+[:expect-http {:status 200}]   ; before any :http
+; => :http/no-request-yet {:index 0}
+```
+
+No `:http-allow` at all means no `:http` step plans. The list is a manifest
+fact, not a step argument, so a scenario cannot widen it. There is
+deliberately no shell or exec step: an HTTP call to a declared service is the
+whole surface.
 
 ## The app-db invariant channel
 
@@ -350,9 +555,10 @@ not be yours.
 Arity and shape are checked while compiling, before a browser opens:
 
 ```clojure
-[:fill "#a"]      ; => :step/malformed {:expected-arity 2 :got-arity 1 :index 2}
+[:fill :#a]       ; => :step/malformed {:expected-arity 2 :got-arity 1 :index 2}
 [:teleport "/x"]  ; => :step/unknown-kind {:known [:goto :back … ]}
 ["goto" "/x"]     ; => :step/no-kind
+[:click [:li :a :b]] ; => :selector/malformed {:problem "…at most one child…"}
 ```
 
 ## Adding a step kind
@@ -366,11 +572,46 @@ no edit to existing code, and an earlier rule can shadow a built-in one.
   (reify step/IStepRule
     (rule-id   [_] :swipe)
     (applies?  [_ st] (= :swipe (first st)))
-    (compile-op [_ st] (r/ok {:op/kind :swipe :op/channel :browser
-                              :op/args (vec (rest st)) :op/source (vec st)}))))
+    (compile-op [_ [_ target dir :as st]]
+      ;; compile the selector datum here, as the built-in kinds do, so the
+      ;; adapter only ever sees a string
+      (let [res (sel/compile-selector target)]
+        (if (r/ok? res)
+          (r/ok {:op/kind :swipe :op/channel :browser
+                 :op/args [(:ok res) dir] :op/source (vec st)})
+          res)))))
 
-(step/compile-step (conj step/default-rules swipe) [:swipe "#a" :left])
+(step/compile-step (conj step/default-rules swipe) [:swipe :#carousel :left])
 ```
 
 For a browser kind, also add a `perform-op` defmethod in the adapter — it
 dispatches on `:op/kind`, so that too is open for extension.
+
+### Step semantics travel on the op
+
+What a kind *means* is carried by the op it compiles to, not by a list inside
+hive-cljs, so a new kind needs no edit here to behave correctly:
+
+| flag             | meaning                                                         |
+|------------------|-----------------------------------------------------------------|
+| `:op/assert?`    | the runtime channel's returned value IS the verdict — falsy fails |
+| `:op/poll?`      | a condition polled until it holds (`:wait-for-*`), not asserted once |
+| `:op/read-only?` | the step only observes, so a `:mutations` app-db invariant skips it |
+
+`:op/assert?` is not runtime-only: on the HTTP channel it is what separates
+`:expect-http` (judges the last response) from `:http` (makes a request), and
+the plan's allowlist check reads it the same way.
+
+A runtime assertion of your own stamps them on the op it returns:
+
+```clojure
+(r/ok {:op/kind :expect-swiped :op/channel :runtime :op/args [dir]
+       :op/assert? true :op/poll? false :op/read-only? true
+       :op/source (vec st)})
+```
+
+A rule may also implement `hive-cljs.step/IStepSemantics` to report the same
+map without compiling a step; every built-in rule does. An op carrying no flag
+falls back to `step/assertion-kinds`, `step/poll-kinds` and
+`step/read-only-kinds`, so hand-built ops and rules written before the flags
+existed keep their old behaviour.

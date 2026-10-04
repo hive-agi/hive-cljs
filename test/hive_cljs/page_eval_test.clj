@@ -46,7 +46,8 @@
       (is (str/includes? src "v ? v : false"))))
   (testing "a poll carries the value alongside the verdict"
     (let [src (js/probe-source (op :wait-for-js "window.ready"))]
-      (is (str/includes? src "[!!v, v]")))))
+      (is (re-find #"const v = \(window\.ready\);" src))
+      (is (re-find #"return \[!!\(?v\)?, v\]" src)))))
 
 (deftest the-js-dialect-declines-the-re-frame-vocabulary
   ;; It has no idea what a subscription is, and must say so rather than guess.
@@ -56,7 +57,7 @@
 (deftest the-probe-vocabulary-reads-through-one-contract
   (let [src (js/assertion-source (op :expect-state ["model" "user" "name"] "v !== null"))]
     (testing "the path is a JSON array whose first segment names the source"
-      (is (str/includes? src "read([\"model\",\"user\",\"name\"])")))
+      (is (re-find #"\.read\(\[\"model\", ?\"user\", ?\"name\"\]\)" src)))
     (testing "the predicate sees the read value as v"
       (is (str/includes? src "v !== null")))
     (testing "and a pass reports the value rather than a bare true"
@@ -77,7 +78,8 @@
   ;; Not "the value is missing" — the contract was never installed, and only one
   ;; of those is about the application.
   (let [src (js/assertion-source (op :expect-state ["model"] "v"))]
-    (is (str/includes? src "if (!window.__hive__) throw new Error"))
+    (is (re-find #"window\.__hive__ \?.*: \(\(\) => \{ throw new Error\(" src)
+        "the read is guarded by the probe's presence and throws without it")
     (is (str/includes? src "never installed"))
     (is (str/includes? src ":expect-js")
         "and points at the vocabulary that needs no probe")))
@@ -109,7 +111,7 @@
     (is (r/ok? res))
     (is (verdict/run-ok? (:ok res)))
     (let [[[_ src]] (stub/page-evals driver)]
-      (is (str/includes? src "window.__hive__.read")))))
+      (is (re-find #"\(?window\.__hive__\)?\.read\(" src)))))
 
 ;; =============================================================================
 ;; The channel's shape is the argument

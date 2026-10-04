@@ -1,5 +1,8 @@
 ;; :port overrides the descriptor's 9630 — shadow takes the next free port with
 ;; only a warning, so check the startup banner and set what it ACTUALLY bound.
+;;
+;; Selectors are data (:#go is "#go") and predicates are forms, not strings.
+;; See docs/steps.md for the full syntax.
 {:hive.cljs/shadow {:port 9631}
  :hive.cljs/e2e
  {:base-url "http://localhost:8280"
@@ -8,23 +11,32 @@
   :scenarios
   [{:id :login :build :app :tags [:smoke]
     :steps [[:goto "/"]
-            [:wait-for "#go"]
-            [:expect-hidden "#hi"]
-            [:click "#go"]
-            [:expect-text "#hi" "Hello, pedro"]
-            [:expect-sub [:current-user] "#(= % \"pedro\")"]
-            [:expect-db [:user] "#(= % \"pedro\")"]
+            [:wait-for :#go]
+            [:expect-hidden :#hi]
+            [:click :#go]
+            [:expect-text :#hi "Hello, pedro"]
+            [:expect-sub [:current-user] (fn [u] (= u "pedro"))]
+            [:expect-db [:user] (fn [u] (= u "pedro"))]
             [:screenshot "logged-in"]]}
    {:id :inputs :build :app :tags [:inputs]
     :steps [[:goto "/"]
-            [:wait-for "#name"]
-            [:fill "#name" "ada"]
-            [:expect-value "#name" "ada"]
-            [:select "#country" "BR"]
-            [:expect-value "#country" "BR"]
-            [:check "#agree"]
-            [:hover "#go"]
-            [:press "#name" "Enter"]
-            [:expect-text "#echo" "ada"]]}]}
+            [:wait-for :#name]
+            ;; Every input action is followed by an assertion on the state the
+            ;; handler wrote AND on the DOM, so a keystroke that never reaches
+            ;; the renderer fails here rather than further downstream.
+            [:fill :#name "ada"]
+            [:wait-for-sub [:name] (fn [v] (= v "ada"))]
+            [:expect-value :#name "ada"]
+            [:select :#country "BR"]
+            [:wait-for-sub [:country] (fn [v] (= v "BR"))]
+            [:expect-value :#country "BR"]
+            [:check :#agree]
+            [:wait-for-sub [:agree] true?]
+            [:expect-js (.-checked (dom/one :#agree))]
+            [:hover :#go]
+            [:expect-js (dom/matches? :#go ":hover")]
+            [:press :#name "Enter"]
+            [:wait-for-sub [:echo] (fn [v] (= v "ada"))]
+            [:expect-text :#echo "ada"]]}]}
  :hive.cljs/watch {:on-build-success [[:run-e2e {:tags [:smoke]}]]
                    :debounce-ms 300}}

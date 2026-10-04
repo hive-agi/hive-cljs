@@ -9,7 +9,8 @@
             [hive-dsl.result :as r]
             [taoensso.timbre :as log]
             [hive-cljs.staleness :as staleness]
-            [hive-cljs.toolchain :as toolchain]))
+            [hive-cljs.toolchain :as toolchain]
+            [hive-cljs.http.jdk :as http-jdk]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -22,7 +23,11 @@
 
    Returns a Result of
    {:manifest … :toolchain … :sources … :build-tool … :cljs-eval … :driver …
-    :errors {port err}}
+    :http … :errors {port err}}
+
+   `:http` is the harness's own out-of-band channel (`ports/IHttpChannel`) on
+   the JDK client: it needs no toolchain and no vendor, so it is always
+   present, and the manifest's `:http-allow` decides what it may address.
 
    An unresolvable toolchain is reported as the reason BOTH channels are down,
    rather than two unexplained absences."
@@ -43,6 +48,7 @@
                     :build-tool    (when (r/ok? bt) (:ok bt))
                     :cljs-eval     (when (r/ok? ce) (:ok ce))
                     :driver        (when (r/ok? drv) (:ok drv))
+                    :http          (http-jdk/channel)
                     :errors        (cond-> {}
                                      (r/err? tc-res) (assoc :toolchain tc-res)
                                      (r/err? bt)     (assoc :build-tool bt)
@@ -94,7 +100,7 @@
 (defn run-deps
   "The `deps` map the boundary and supervisor expect."
   [session]
-  (select-keys session [:build-tool :driver :cljs-eval]))
+  (select-keys session [:build-tool :driver :cljs-eval :http]))
 
 (defn health
   "Per-port availability for a session."
@@ -103,6 +109,7 @@
    :build-tool (if (:build-tool session) :ok :down)
    :cljs-eval  (if (:cljs-eval session) :ok :down)
    :browser    (if (:driver session) :ok :down)
+   :http       (if (:http session) :ok :down)
    :errors     (into {} (map (fn [[k v]] [k (:error v)])) (:errors session))})
 
 (defn reported-builds

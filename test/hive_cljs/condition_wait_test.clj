@@ -121,7 +121,7 @@
     (is (= 3 (count (stub/evals ce))) "one invariant read per passing step")
     (testing "the check validates the WHOLE app-db, not a path"
       (let [[[_ form]] (stub/evals ce)]
-        (is (re-find #"malli\.core/explain app\.schema/db @re-frame\.db/app-db" form))))))
+        (is (re-find #"malli\.core/explain app\.schema/db \(deref re-frame\.db/app-db\)" form))))))
 
 (deftest a-violating-app-db-fails-the-step-that-produced-it
   (let [[rep _] (run (manifest-with {:app-db-schema 'app.schema/db} walk)

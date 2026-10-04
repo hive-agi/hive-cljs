@@ -82,14 +82,36 @@
   [raw]
   (or raw default-toolchain))
 
+(defn normalize-artifacts
+  "Resolve a build's `:artifacts` — the output an external watcher leaves.
+
+   A bare string or vector is shorthand for `:outputs`. nil when nothing
+   observable is declared: an empty spec would watch nothing and say so never."
+  [raw]
+  (let [raw     (cond (string? raw) {:outputs [raw]}
+                      (sequential? raw) {:outputs (vec raw)}
+                      (map? raw) raw
+                      :else {})
+        outputs (->> (:outputs raw) (map str) (remove empty?) vec)
+        marker  (some-> (:ready-marker raw) str not-empty)]
+    (when (or (seq outputs) marker)
+      (cond-> {}
+        (seq outputs)                (assoc :outputs outputs)
+        marker                       (assoc :ready-marker marker)
+        (nat-int? (:quiet-ms raw))   (assoc :quiet-ms (:quiet-ms raw))
+        (pos-int? (:poll-ms raw))    (assoc :poll-ms (:poll-ms raw))
+        (boolean? (:hash? raw))      (assoc :hash? (:hash? raw))))))
+
 (defn normalize-build
   "Resolve one build spec; `id` supplies :shadow/id when absent."
   [id raw]
-  (let [raw (or raw {})]
+  (let [raw       (or raw {})
+        artifacts (normalize-artifacts (:artifacts raw))]
     (cond-> {:shadow/id (or (:shadow/id raw) id)}
       (:http-port raw) (assoc :http-port (:http-port raw))
       (:entry raw)     (assoc :entry (:entry raw))
-      (seq (:command raw)) (assoc :command (mapv str (:command raw))))))
+      (seq (:command raw)) (assoc :command (mapv str (:command raw)))
+      artifacts        (assoc :artifacts artifacts))))
 
 (defn normalize-builds
   [raw]
@@ -190,8 +212,9 @@
             :scenarios     (expand-matrix entries matrix)
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
-                             :ignore-https-errors :viewport :iframe :launch-args
+                             :ignore-https-errors :viewport :iframe :window-class :launch-args
                              :app-db-schema :app-db-check])
+           (when (contains? raw :http-allow) {:http-allow (vec (:http-allow raw))})
            (when (seq matrix) {:matrix matrix}))))
 
 (defn normalize-action
@@ -337,6 +360,15 @@
                 (when (seq (:command spec)) [id (:command spec)])))
         (:manifest/builds manifest)))
 
+(defn build-artifacts
+  "`{build-id artifact-spec}` for every build declaring observable output —
+   the builds whose compiles can be seen when something else runs them."
+  [manifest]
+  (into {}
+        (keep (fn [[id spec]]
+                (when-let [a (:artifacts spec)] [id a])))
+        (:manifest/builds manifest)))
+
 (defn coverage
   "Normalized coverage config, or nil when the project authors none."
   [manifest]
@@ -359,6 +391,8 @@
 (m/=> normalize [:=> [:cat [:map-of :keyword :any] s/NonBlankString] :map])
 (m/=> scenarios [:=> [:cat s/Manifest] [:vector s/Scenario]])
 (m/=> build-ids [:=> [:cat s/Manifest] [:vector s/BuildId]])
+(m/=> normalize-artifacts [:=> [:cat :any] [:maybe s/ArtifactSpec]])
+(m/=> build-artifacts [:=> [:cat s/Manifest] [:map-of s/BuildId s/ArtifactSpec]])
 
 (m/=> build-base-url [:=> [:cat [:map-of s/BuildId s/BuildSpec] s/BuildId]
                       [:maybe s/NonBlankString]])

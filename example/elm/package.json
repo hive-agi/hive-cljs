@@ -1,0 +1,14 @@
+{
+  "name": "hive-cljs-example-elm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "hive-cljs example app: Elm + the :browser toolchain + the injected probe",
+  "license": "MIT",
+  "scripts": {
+    "build": "elm make src/Main.elm --output=public/app.js",
+    "start": "node serve.js"
+  },
+  "devDependencies": {
+    "elm": "0.19.1-5"
+  }
+}

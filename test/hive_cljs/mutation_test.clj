@@ -3,6 +3,7 @@
    notices. The verdict is inverted — a green run under a fault is the failure."
   (:require [clojure.test :refer [deftest is testing]]
             [hive-cljs.boundary :as boundary]
+            [hive-cljs.dialect.source :as source]
             [hive-cljs.manifest :as manifest]
             [hive-cljs.mutation :as mutation]
             [hive-cljs.plan :as plan]
@@ -24,13 +25,65 @@
                                      :target 'app.view-model/derive-status
                                      :with "(constantly nil)"})]
     (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
-    (is (= "(set! app.view-model/derive-status (constantly nil))" (:fault/form f)))
+    (is (= "(set! app.view-model/derive-status (constantly nil))"
+           (source/form->string (:fault/form f))))
     (is (= 'app.view-model/derive-status (:fault/target f)))))
+
+(deftest a-target-and-a-replacement-FORM-become-a-set-form
+  ;; The form spelling is primary: a manifest is EDN, so `:with` can simply BE
+  ;; the replacement, and the fault stays a form until the channel prints it.
+  (let [f (mutation/normalize-fault {:id :status-hole
+                                     :target 'app.view-model/derive-status
+                                     :with '(constantly nil)})]
+    (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
+    (is (= '(set! app.view-model/derive-status (constantly nil)) (:fault/form f))
+        "built as a list, not concatenated")
+    (is (= "(set! app.view-model/derive-status (constantly nil))"
+           (source/form->string (:fault/form f))))
+    (testing "the string and form spellings of :with render the same source"
+      (is (= (source/form->string (:fault/form f))
+             (source/form->string
+              (:fault/form (mutation/normalize-fault
+                            {:id :status-hole :target 'app.view-model/derive-status
+                             :with "(constantly nil)"}))))))
+    (testing "a non-list replacement is a form too"
+      (is (= "(set! a/b nil)"
+             (source/form->string
+              (:fault/form (mutation/normalize-fault {:target 'a/b :with 'nil})))))
+      (is (= "(set! a/b false)"
+             (source/form->string
+              (:fault/form (mutation/normalize-fault {:target 'a/b :with false}))))))))
 
 (deftest raw-source-is-taken-as-authored
   (let [f (mutation/normalize-fault {:id :sub-hole :form "(reg-sub :x (fn [_ _] nil))"})]
     (is (= "(reg-sub :x (fn [_ _] nil))" (:fault/form f)))
     (is (nil? (:fault/target f)))))
+
+(deftest a-form-fault-is-taken-as-authored-and-printed-only-at-the-channel
+  (let [form '(re-frame.core/reg-sub :x (fn [_ _] nil))
+        f    (mutation/normalize-fault {:id :sub-hole :form form})]
+    (is (m/validate s/Fault f) (pr-str (m/explain s/Fault f)))
+    (is (= form (:fault/form f)))
+    (testing "the fault op carries the form; the stub channel prints it"
+      (let [ce (stub/cljs-eval)]
+        (is (= form (first (:op/args (mutation/fault-op f)))))
+        (boundary/perform-runtime! ce :app (mutation/fault-op f))
+        (is (= [[:app "(re-frame.core/reg-sub :x (fn [_ _] nil))"]] (stub/evals ce)))))))
+
+(deftest a-fault-form-prints-the-same-whatever-the-callers-printer-vars
+  (let [f    (mutation/normalize-fault {:target 'app/f
+                                        :with '(fn [m] (assoc m :a/x [1 2 3 4 5]))})
+        base (source/form->string (:fault/form f))]
+    (is (= "(set! app/f (fn [m] (assoc m :a/x [1 2 3 4 5])))" base))
+    (binding [*print-length* 2 *print-namespace-maps* true *print-readably* false
+              *print-meta* true *print-level* 1]
+      (is (= base (source/form->string (:fault/form f)))))))
+
+(deftest a-blank-string-is-not-a-fault-form
+  (is (nil? (mutation/normalize-fault {:id :x :form "   "})))
+  (is (nil? (mutation/normalize-fault {:target 'a/b :with ""})))
+  (is (not (m/validate s/Fault {:fault/id :x :fault/form ""})))
+  (is (m/validate s/Fault {:fault/id :x :fault/form '(do nil)})))
 
 (deftest an-id-is-derived-from-the-target-when-none-is-given
   (is (= :app.view-model.derive-status
@@ -41,6 +94,7 @@
   (is (nil? (mutation/normalize-fault {:id :empty})))
   (is (nil? (mutation/normalize-fault {:target 'a/b})))
   (is (nil? (mutation/normalize-fault {:with "(constantly nil)"})))
+  (is (nil? (mutation/normalize-fault {:with '(constantly nil)})))
   (testing "and the drop does not take the usable ones with it"
     (is (= [:good]
            (mapv :fault/id
@@ -50,10 +104,13 @@
 (deftest declared-faults-reach-the-normalized-manifest
   (let [m (:ok (manifest/parse
                 {:hive.cljs/builds {:app {:http-port 8280}}
-                 :hive.cljs/e2e    {:faults [{:id :hole :target 'a/b :with "nil"}]
+                 :hive.cljs/e2e    {:faults [{:id :hole :target 'a/b :with "nil"}
+                                             {:id :form-hole :target 'a/c
+                                              :with '(constantly nil)}]
                                     :scenarios [{:id :s :steps [[:goto "/"]]}]}}
                 "/tmp/hive-cljs-faults"))]
-    (is (= [:hole] (mapv :fault/id (get-in m [:manifest/e2e :faults]))))))
+    (is (= [:hole :form-hole] (mapv :fault/id (get-in m [:manifest/e2e :faults]))))
+    (is (= '(set! a/c (constantly nil)) (:fault/form (second (get-in m [:manifest/e2e :faults])))))))
 
 ;; =============================================================================
 ;; Injection
@@ -77,10 +134,11 @@
 (deftest the-fault-lands-after-the-navigation-that-would-wipe-it
   (let [p (mutation/inject (plan-for [[:goto "/"] [:click "#go"] [:expect-visible "#p"]])
                            fault)]
-    (is (= [:goto :eval-cljs :click :expect-visible] (mapv :op/kind (:plan/ops p))))
+    (is (= [:goto :hive-cljs/at-origin :eval-cljs :click :expect-visible]
+           (mapv :op/kind (:plan/ops p))))
     (is (m/validate s/RunPlan p) (pr-str (m/explain s/RunPlan p)))
     (testing "the injected op rides the runtime channel"
-      (is (= :runtime (:op/channel (second (:plan/ops p))))))))
+      (is (= :runtime (:op/channel (nth (:plan/ops p) 2)))))))
 
 (deftest a-plan-that-never-navigates-takes-the-fault-at-the-head
   (let [p (mutation/inject (plan-for [[:expect-sub [:x] "some?"]]) fault)]
@@ -94,15 +152,16 @@
              (plan-for [[:goto "/"] [:wait-for "#app"] [:wait-ms 10]
                         [:eval-cljs "(seed!)"] [:expect-visible "#p"]])
              fault)]
-      (is (= [:goto :wait-for :wait-ms :eval-cljs :eval-cljs :expect-visible]
+      (is (= [:goto :wait-for :wait-ms :hive-cljs/at-origin :eval-cljs :eval-cljs
+              :expect-visible]
              (mapv :op/kind (:plan/ops p))))
       (is (= (:fault/form fault)
-             (first (:op/args (nth (:plan/ops p) 3))))
+             (first (:op/args (nth (:plan/ops p) 4))))
           "the fault runs before the scenario's own first eval, not after it")))
   (testing "waits AFTER the scenario's own work are not boot barriers"
     (let [p (mutation/inject
              (plan-for [[:goto "/"] [:click "#go"] [:wait-for "#done"]]) fault)]
-      (is (= [:goto :eval-cljs :click :wait-for]
+      (is (= [:goto :hive-cljs/at-origin :eval-cljs :click :wait-for]
              (mapv :op/kind (:plan/ops p)))))))
 
 (deftest injection-leaves-the-original-plan-alone
@@ -209,7 +268,12 @@
 
     (testing "a neutralized sub clears the reaction cache on both sides"
       (is (re-find #"clear-subscription-cache!.*reg-sub :app/items.*clear-subscription-cache!"
-                   (:fault/form (first (:ok res))))))
+                   (source/form->string (:fault/form (first (:ok res)))))))
+
+    (testing "derived faults are FORMS; only the channel stringifies them"
+      (is (every? (comp seq? :fault/form) (:ok res)))
+      (is (= '(do (re-frame.core/reg-event-db :app/load (fn [db _] db)) :neutralized)
+             (:fault/form (last (:ok res))))))
 
     (testing "every derived fault conforms"
       (is (every? #(m/validate s/Fault %) (:ok res))))))
@@ -222,3 +286,88 @@
 
   (testing "asking for no registries is not an error, it is an empty catalog"
     (is (= [] (:ok (boundary/derive-faults! {} (plan-for walk) []))))))
+
+;; =============================================================================
+;; Unapplied faults — never a kill
+;; =============================================================================
+
+(deftest a-fault-that-never-ran-is-unapplied-not-killed
+  (let [v (mutation/verdict fault [{:run/scenario :a :run/state :error
+                                    :fault/applied? false}])]
+    (is (false? (:fault/killed? v)))
+    (is (= :unapplied (:fault/status v)))
+    (is (m/validate s/FaultVerdict v))))
+
+(deftest unapplied-faults-are-reported-apart-and-left-out-of-the-score
+  (let [rep (mutation/report [:a]
+                             [{:fault/id :k :fault/killed? true :fault/status :killed}
+                              {:fault/id :s :fault/killed? false :fault/status :survived}
+                              {:fault/id :u :fault/killed? false :fault/status :unapplied}])]
+    (is (= [:k] (:mutation/killed rep)))
+    (is (= [:s] (:mutation/survived rep)))
+    (is (= [:u] (:mutation/unapplied rep)))
+    (is (= 0.5 (:mutation/score rep)))
+    (is (m/validate s/MutationReport rep)))
+  (testing "a catalog where nothing applied proves nothing"
+    (is (= 0.0 (mutation/score [{:fault/id :u :fault/killed? false
+                                 :fault/status :unapplied}])))))
+
+(defn- absolute-plan [steps]
+  (assoc (plan-for steps) :plan/base-url "http://app.test:8080/"))
+
+(deftest a-navigating-plan-guards-the-fault-on-the-app-origin
+  (let [p   (mutation/inject (absolute-plan walk) fault)
+        ops (:plan/ops p)]
+    (is (= [:goto :hive-cljs/at-origin :eval-cljs :expect-visible] (mapv :op/kind ops)))
+    (is (= ["http://app.test:8080"] (:op/args (nth ops 1))))
+    (is (m/validate s/RunPlan p))))
+
+(deftest a-login-detour-puts-the-fault-after-arrival-on-the-app
+  (let [steps [[:goto "https://idp.test/login"] [:fill "#u" "me"] [:click "#go"]
+               [:expect-url "http://app.test:8080/home"] [:wait-for "#app"]
+               [:expect-visible "#panel"]]
+        ops   (:plan/ops (mutation/inject (absolute-plan steps) fault))]
+    (is (= [:goto :fill :click :expect-url :wait-for :hive-cljs/at-origin :eval-cljs
+            :expect-visible]
+           (mapv :op/kind ops)))))
+
+(deftest a-fault-stopped-by-the-origin-guard-is-unapplied
+  ;; The redirect to the IdP: the guard fails, the run goes red, and that red
+  ;; must not be counted as the suite noticing the fault.
+  (let [deps {:driver    (stub/driver (fn [_ op]
+                                        (if (= :hive-cljs/at-origin (:op/kind op))
+                                          {:state :fail :detail "on idp" :elapsed-ms 1}
+                                          {:state :pass :elapsed-ms 1})))
+              :cljs-eval (stub/cljs-eval (constantly true))}
+        res  (boundary/run-mutations! deps [(absolute-plan walk)] [fault])]
+    (is (r/ok? res) (pr-str res))
+    (is (= [] (:mutation/killed (:ok res))))
+    (is (= [:hole] (:mutation/unapplied (:ok res))))
+    (is (= 0.0 (:mutation/score (:ok res))))))
+
+(deftest a-fault-whose-eval-errors-is-unapplied
+  (let [deps {:driver    (stub/driver)
+              :cljs-eval (stub/cljs-eval (fn [_ form]
+                                           (if (= (:fault/form fault) form)
+                                             (r/err :eval/no-runtime {})
+                                             true)))}
+        res  (boundary/run-mutations! deps [(absolute-plan walk)] [fault])]
+    (is (r/ok? res) (pr-str res))
+    (is (= [:hole] (:mutation/unapplied (:ok res))))))
+
+(deftest an-undeterminable-app-page-leaves-the-fault-unapplied
+  (let [p   (assoc (plan-for walk) :plan/base-url "relative/only")
+        res (boundary/run-mutations! {:driver    (stub/driver)
+                                      :cljs-eval (stub/cljs-eval (constantly true))}
+                                     [p] [fault])]
+    (is (false? (mutation/injectable? p)))
+    (is (r/ok? res) (pr-str res))
+    (is (= [:hole] (:mutation/unapplied (:ok res))))
+    (is (= [] (:mutation/killed (:ok res))))))
+
+(deftest a-guarded-applied-fault-the-suite-notices-is-still-killed
+  (let [res (boundary/run-mutations! (noticing-deps (atom false))
+                                     [(absolute-plan walk)] [fault])]
+    (is (r/ok? res) (pr-str res))
+    (is (= [:hole] (:mutation/killed (:ok res))))
+    (is (= 1.0 (:mutation/score (:ok res))))))

@@ -16,13 +16,18 @@ COLLECT    manifest (raw EDN → normalized, defaults resolved)
 TYPES      schema (malli value objects) · ports · profile (provider behaviour as data)
 
 DIALECT    dialect/re-frame · dialect/js   (op → source text a runtime evaluates)
+             ├ dialect/probe  — probe forms → one JS expression (closed language)
+             ├ dialect/source — forms → ClojureScript source under pinned printer vars
              └ resources/hive_cljs/probe.js — the JS half of dialect/js's contract
+           selector (selector data → CSS/Playwright selector string)
 REGISTRY   toolchain (id → IToolchain)     ← the composition root's swap point
 ADAPTERS   shadow/toolchain → IToolchain           (:shadow-cljs)
              ├ shadow/relay → IBuildTool
              └ shadow/nrepl → ICljsEval + IRuntimeDialect + IRuntimeIntrospection
            browser/toolchain → IToolchain          (:browser — every other stack)
              ├ build/process   → IBuildTool        (argv + exit code)
+             │  └ build/observe → samples :artifacts via IFileStamps + IClock;
+             │                    build/artifacts (pure) decides a compile happened
              └ browser/page-eval → ICljsEval + IRuntimeDialect + ISessionBound
            browser/playwright → IBrowserDriver + IPageMarker + IPageEval
 ```
@@ -196,8 +201,21 @@ every op lives in the `shadow.cljs` namespace, and build status arrives via the
 sync-db rather than a subscribe topic.
 
 **`step`** is an ordered `IStepRule` chain — first match wins, so a new step kind
-is an appended rule and an earlier rule can shadow a built-in. See
+is an appended rule and an earlier rule can shadow a built-in. A rule stamps
+its kind's semantics (`:op/assert?`, `:op/poll?`, `:op/read-only?`) onto the
+op, and `boundary` reads the op rather than a membership set. See
 [steps.md](steps.md#adding-a-step-kind).
+
+`step` is also where authored **data** becomes text. A selector datum (`:#go`,
+`[:li {:has-text "X"}]`) is compiled by `selector` into the string the driver
+reads, and a probe form (`(= js/document.title "Inbox")`, whose `dom/`
+selectors are data too) is checked by `dialect/probe` while the plan compiles.
+The one selector that is not a step argument, `:iframe`, is compiled by `plan`
+in the same pass. Either failure is a typed
+plan error, so a malformed selector or an unknown probe function never reaches
+a browser. The authored datum stays in `:op/source` for the report. A string in
+either place is passed through verbatim: it is the documented
+[escape hatch](steps.md#strings-are-the-escape-hatch), not the taught form.
 
 **`plan`** is pure orchestration: it resolves the base URL, compiles steps to ops
 and produces a `RunPlan` as data. No port is touched.
@@ -207,6 +225,13 @@ arrives as an argument (`{:build-tool … :driver … :cljs-eval …}`).
 
 **`watch`** decides; `watch/supervisor` executes. Debounce is *decided* purely
 from timestamps; only sleeping, subscribing and running live in the supervisor.
+
+**`build/artifacts`** decides, from filesystem stamps and a clock reading, when
+a build hive did not run has finished emitting output (baseline first sample,
+quiet window, optional ready-marker); `build/observe` only samples through the
+`IFileStamps` / `IClock` ports and emits the resulting `BuildEvent` through the
+process build tool's subscribers — so an external `vite --watch` drives
+`cljs watch` exactly like a hive-driven compile.
 
 ## Testing
 

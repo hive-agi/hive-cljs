@@ -206,10 +206,49 @@ compile.
 Declare no `:command` and the toolchain reports `:build-tool/not-supervised` —
 scenarios still run, `cljs status` and `cljs compile` do not.
 
-One real limit: this channel only sees compiles **it** ran, so `cljs watch`
-couples to hive-driven builds and not to an external `vite --watch`. It is
-reported that way rather than papered over with a poller that would invent a
-verdict between file writes.
+#### `:artifacts` — observing a build something else runs
+
+A `:command` only reports compiles that **hive** ran. When an external
+`vite --watch`, `elm-live` or `tsc --watch` is already running, declare the
+output it writes and hive observes that instead:
+
+```clojure
+{:hive.cljs/toolchain :browser
+ :hive.cljs/builds {:app {:http-port 5173
+                          :artifacts ["dist"]}}}          ; shorthand for {:outputs ["dist"]}
+
+;; or, in full
+{:app {:artifacts {:outputs      ["dist" "public/app.js"] ; files or dirs, root-relative
+                   :ready-marker ".hive-built"   ; optional: a file the tool touches when done
+                   :quiet-ms     300             ; output must hold still this long (default 300)
+                   :poll-ms      250             ; sampling period (default 250)
+                   :hash?        false}}}        ; compare content hashes, not just mtime+size
+```
+
+While `cljs watch` is running, the declared output is sampled, and a change
+emits the same `BuildEvent` (`:completed`, with the changed files under
+`:build/files`) a hive-driven compile emits — so `:on-build-success` actions
+fire for external compiles too. The rules:
+
+- the first sample is a **baseline**: output already on disk when watching
+  starts is never reported;
+- a change is reported only after it has held still for `:quiet-ms`, so a
+  bundler writing many files is one event and never a half-written bundle;
+- with `:ready-marker` only the marker is watched and its change is reported
+  at once — the tool itself said it was done;
+- output that vanished entirely (vite empties `outDir` first) is a build in
+  progress, not an event;
+- `:hash? true` ignores a touch that changed no bytes;
+- a compile hive runs itself (`cljs compile`) is reported from its exit code,
+  and the output it wrote is not reported a second time.
+
+What this cannot see is an external compile that **failed**: such a tool
+usually writes nothing, so there is no event rather than a red one. A build
+may declare both `:command` and `:artifacts`; one declaring only `:artifacts`
+is observed, and `cljs compile` on it answers `:build/no-command`.
+
+Sampling is not a timer verdict: an event fires only when the artifact under
+test changed. A build declaring neither key reports `:build-tool/not-supervised`.
 
 ### `:hive.cljs/e2e` — browser and scenarios
 
@@ -217,6 +256,7 @@ verdict between file writes.
 {:base-url       "http://localhost:8280"  ; inferred from a build's :http-port
  :browser        :chromium                ; :chromium | :firefox | :webkit
  :headless       true
+ :window-class   "hive-cljs-headed"       ; WM_CLASS of a headed window (X11)
  :timeout-ms     15000
  :poll-ms        250                      ; condition-wait poll interval
  :viewport       {:width 1280 :height 800} ; optional; a scenario may override
@@ -228,14 +268,15 @@ verdict between file writes.
                             :is-mobile true
                             :has-touch true
                             :tags #{:ios :mobile}}}
- :iframe         "#player"                ; optional; scopes steps to a child document
+ :iframe         :#player                 ; optional; scopes steps to a child document
  :artifacts-dir  "<root>/.hive-cljs/artifacts"
  :scenario-paths ["test/e2e"]             ; optional — scenarios living with the suite
  :app-db-schema  my.app.schema/app-db     ; optional — asserted between steps
  :app-db-check   :every-step              ; :every-step | :mutations | :final
+ :http-allow     ["localhost:12345"]      ; optional — host:port an [:http …] step may address
  :faults         [{:id     :status-hole   ; optional — the mutation catalog
                    :target my.app.view-model/derive-status
-                   :with   "(constantly nil)"}]
+                   :with   (constantly nil)}]  ; a form; a string still works
  :scenarios      [{:id    :login          ; required
                    :build :app            ; optional — inherited if unambiguous
                    :tags  [:smoke]        ; optional — selects for `e2e run` / watch
@@ -248,6 +289,35 @@ Relative `:goto` URLs resolve against the scenario's base URL — the
 through.
 Screenshots land in `:artifacts-dir` and are listed in the run report's
 `:run/artifacts`.
+
+#### `:window-class`: keeping headed browsers out of your way
+
+A headed run (`:headless false`) opens real Chromium or Firefox windows. On X11
+each one is launched with `--class=<window-class>`, default
+`"hive-cljs-headed"`, so the window manager can place them away from the window
+you are typing in. Headless runs and WebKit get no flag.
+
+XMonad: send them to a workspace without switching the view, and ignore their
+activation requests (Playwright activates the window on launch and on
+`bringToFront`, which the stock EWMH hook answers by switching workspace):
+
+```haskell
+import XMonad.Hooks.EwmhDesktops (ewmh, setEwmhActivateHook)
+import XMonad.Hooks.ManageHelpers (doFocus)
+
+myManageHook = composeAll
+  [ className =? "hive-cljs-headed" --> doShift (myWorkspaces !! 4)  -- first, so it wins
+  , ... ]
+
+myActivateHook :: ManageHook
+myActivateHook = do
+  c <- className
+  if c == "hive-cljs-headed" then mempty else doFocus
+
+main = xmonad $ setEwmhActivateHook myActivateHook $ ewmh $ def { manageHook = myManageHook, ... }
+```
+
+Other window managers match the same class (i3/sway: `for_window [class="hive-cljs-headed"] move to workspace 5`).
 
 #### `:matrix` — one scenario, several observation surfaces
 
@@ -294,19 +364,20 @@ the application inside an iframe. `document` in the top page is then the
 
 ```clojure
 ;; without :iframe, each step has to carry its own way in
-[:expect-js "document.querySelector('hyperframes-player')
-               .shadowRoot.querySelector('iframe')
-               .contentDocument.querySelectorAll('.fragment.visible').length === 1"]
+[:expect-js (= 1 (dom/count (.-contentDocument
+                              (dom/one (.-shadowRoot (dom/one :hyperframes-player))
+                                       :iframe))
+                             :.fragment.visible))]
 
 ;; with it, the step is the question again
-[:expect-count ".fragment.visible" 1]
+[:expect-count :.fragment.visible 1]
 ```
 
 Set it on `:hive.cljs/e2e` for the whole manifest, or on one scenario to
 override:
 
 ```clojure
-{:id :deck :iframe "hyperframes-player iframe" :steps [[:goto "/"] …]}
+{:id :deck :iframe [:in :hyperframes-player :iframe] :steps [[:goto "/"] …]}
 ```
 
 It scopes **both** channels: the DOM steps and the JavaScript ones evaluate
@@ -324,6 +395,12 @@ while reporting a pass, which is the confusion this option exists to remove.
 Named `:iframe` and not `:frame`, because `:frame` is already the re-frame2
 frame id.
 
+`:iframe` is [selector data](steps.md#selectors-are-data), like a step's
+selector: `:#player` or `[:in :hyperframes-player :iframe]`. The plan compiles
+it once, so a malformed one is a `:selector/malformed` error (tagged
+`:key :iframe`) before a browser opens. A string still works, as the
+[escape hatch](steps.md#strings-are-the-escape-hatch).
+
 #### `:app-db-schema` — one schema, asserted between steps
 
 Turns every scenario into a state-corruption detector on top of its own
@@ -331,10 +408,19 @@ assertions. See [steps.md](steps.md#the-app-db-invariant-channel).
 
 #### `:faults` — the mutation catalog
 
-Each entry is `{:id :target :with}` (replace a var) or `{:id :form "…"}`
-(evaluate arbitrary source). `cljs e2e mutate` injects each one and reports the
-ones no scenario turned red. `:auto` derives a catalog from the app's own
-re-frame registries with no config at all.
+Each entry is `{:id :target :with}` (replace a var) or `{:id :form …}`
+(evaluate arbitrary source). `:with` and `:form` are forms, written as EDN:
+
+```clojure
+:faults [{:id :status-hole :target my.app.view-model/derive-status :with (constantly nil)}
+         {:id :items-hole  :form (re-frame.core/reg-sub :app/items (fn [_ _] []))}
+         ;; a string is the escape hatch for reader macros EDN cannot carry
+         {:id :count-hole  :target my.app/count-items :with "#(- (count %) 1)"}]
+```
+
+`cljs e2e mutate` injects each one and reports the ones no scenario turned
+red. `:auto` derives a catalog from the app's own re-frame registries with no
+config at all.
 
 ### `:hive.cljs/watch` — build → e2e coupling
 
@@ -399,11 +485,13 @@ A run that measured nothing is `:unavailable`, never a pass.
 | `shadow :nrepl-port` | none — runtime channel disabled |
 | `e2e :base-url` | per scenario: the named `:build`'s `:http-port`, else this key, else `http://localhost:<first build's :http-port>`, else `http://localhost:8080` |
 | `e2e :browser` / `:headless` / `:timeout-ms` | `:chromium` / `true` / `15000` |
+| `e2e :window-class` | `"hive-cljs-headed"` (headed Chromium/Firefox only) |
 | `e2e :poll-ms` | `250` |
 | `e2e :artifacts-dir` | `<root>/.hive-cljs/artifacts` |
 | `e2e :scenario-paths` / `:faults` | none / `[]` |
 | `e2e :app-db-schema` | none — no invariant asserted |
 | `e2e :app-db-check` | `:every-step` (only consulted with a schema) |
+| `e2e :http-allow` | none — no `[:http …]` step plans ([steps.md](steps.md#http-steps-the-harness-acts-out-of-band)) |
 | `watch :debounce-ms` | `500` |
 | `watch :on-build-success` / `:on-build-failure` | `[]` / `[]` |
 | `watch :builds` | all builds |

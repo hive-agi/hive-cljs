@@ -6,7 +6,8 @@
 
    Two families:
    - `Raw*`        — permissive, boundary-facing (project EDN, MCP string coercion)
-   - everything else — `:closed true` internal plan/report shapes")
+   - everything else — `:closed true` internal plan/report shapes"
+  (:require [hive-cljs.selector :as selector]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -100,18 +101,106 @@
    [:fn {:error/message "step must start with a keyword"}
     #(keyword? (first %))]])
 
+(def ErrorsOpts
+  "Options of the `:expect-no-errors` step, authored as data — never as JS text.
+   `:sources` narrows which recorded errors count; `:ignore` excuses errors
+   whose text contains any of the substrings."
+  [:map {:closed true}
+   [:sources {:optional true} [:set [:enum :console :pageerror]]]
+   [:ignore {:optional true} [:vector :string]]])
+
+(def HttpMethod
+  [:enum :get :post :put :patch :delete :head :options])
+
+(def HttpRequest
+  "The argument of an `[:http {...}]` step: a request the HARNESS makes, as
+   data. `:url` is absolute and its `host:port` must be on the manifest's
+   `:http-allow` (checked when the plan is built). A string `:body` is sent as
+   written; any other body is encoded as JSON. `:as :json` decodes the
+   response body to EDN for `:expect-http`; the default `:text` keeps it a
+   string."
+  [:map {:closed true}
+   [:method {:optional true} HttpMethod]
+   [:url NonBlankString]
+   [:headers {:optional true} [:map-of [:or :keyword :string] [:or :string :int]]]
+   [:body {:optional true} :any]
+   [:as {:optional true} [:enum :json :text]]
+   [:timeout-ms {:optional true} [:int {:min 1}]]])
+
+(def HttpExpect
+  "The argument of `[:expect-http {...}]`, judged against the LAST `:http`
+   response of the run. Every key present must hold:
+
+   - `:status`        an int, or a set of acceptable ints
+   - `:body-includes` data the decoded body must INCLUDE: maps by key subset,
+                      vectors element by element, scalars by value
+   - `:body-contains` a substring of the raw body text
+   - `:headers`       header name → exact value"
+  [:and
+   [:map {:closed true}
+    [:status {:optional true} [:or [:int {:min 100 :max 599}] [:set [:int {:min 100 :max 599}]]]]
+    [:body-includes {:optional true} :any]
+    [:body-contains {:optional true} :string]
+    [:headers {:optional true} [:map-of [:or :keyword :string] [:or :string :int]]]]
+   [:fn {:error/message "an :expect-http must expect something"} seq]])
+
+(def HttpWire
+  "A request as an `IHttpChannel` adapter receives it: method, absolute URL,
+   lower-cased string headers, an already-encoded string body."
+  [:map {:closed true}
+   [:method HttpMethod]
+   [:url NonBlankString]
+   [:headers [:map-of :string :string]]
+   [:body {:optional true} :string]
+   [:timeout-ms [:int {:min 1}]]])
+
+(def HttpAuthority
+  "One `host:port` an `:http` step may address, e.g. \"localhost:12345\".
+   The port is always written, so an allowance never widens silently to a
+   scheme's default."
+  [:re #"^[A-Za-z0-9.\-]+:[0-9]{1,5}$"])
+
+(def Selector
+  "What a selector-taking step accepts: a CSS/Playwright string (passed
+   through), or selector DATA — a `:tag#id.class` keyword, an attribute map,
+   or a hiccup vector — that `hive-cljs.selector` compiles. The `:fn` arm is
+   the compiler itself, so the schema and the step compiler cannot disagree."
+  [:and
+   [:or NonBlankString :keyword [:map-of :keyword :any] [:vector {:min 1} :any]]
+   [:fn {:error/message "selector does not compile (see hive-cljs.selector)"}
+    selector/valid?]])
+
 (def OpChannel
-  "Which port executes a compiled op."
-  [:enum :browser :runtime])
+  "Which port executes a compiled op: the browser (`IBrowserDriver`), the
+   application runtime (`ICljsEval`), or the HARNESS itself over HTTP
+   (`IHttpChannel`) — an out-of-band actor the scenario plays without leaving
+   the page."
+  [:enum :browser :runtime :http])
 
 (def Op
-  "Compiled step: the port-neutral instruction an adapter interprets."
+  "Compiled step: the port-neutral instruction an adapter interprets.
+
+   The `?` flags are the step's SEMANTICS, stamped by the rule that defines
+   its kind, so the boundary reads the op instead of a membership set it would
+   otherwise have to keep in step with the vocabulary:
+
+   - `:op/assert?`    the value the runtime channel returns IS the verdict — a
+                      falsy answer fails the step
+   - `:op/poll?`      a condition polled until it holds, not asserted once
+   - `:op/read-only?` the step only observes, so an app-db invariant need not
+                      be re-asserted after it
+
+   Optional: an op carrying none (a hand-built one, a third-party rule written
+   before the flags existed) falls back to `hive-cljs.step`'s kind sets."
   [:map {:closed true}
    [:op/kind :keyword]
    [:op/channel OpChannel]
    [:op/args [:vector :any]]
    [:op/frame {:optional true} :keyword]
    [:op/expect {:optional true} [:map-of :keyword :any]]
+   [:op/assert? {:optional true} :boolean]
+   [:op/poll? {:optional true} :boolean]
+   [:op/read-only? {:optional true} :boolean]
    [:op/source Step]])
 
 (def Viewport
@@ -123,10 +212,8 @@
    [:height [:int {:min 1}]]])
 
 (def LaunchArgs
-  "Command-line switches the browser process is launched with, e.g. Chromium's
-   --use-fake-device-for-media-stream. Process-wide, so they cannot be set on a
-   context the way a viewport is. On one scenario they REPLACE the manifest's;
-   an empty vector launches that scenario with none."
+  "Command-line switches the browser process is launched with. A scenario's
+   vector replaces the manifest's, including an empty vector."
   [:vector NonBlankString])
 
 (def DeviceScaleFactor
@@ -157,7 +244,8 @@
    [:is-mobile {:optional true} :boolean]
    [:has-touch {:optional true} :boolean]
    [:device-scale-factor {:optional true} DeviceScaleFactor]
-   [:iframe {:optional true} NonBlankString]
+   ;; A selector — string or selector data — like every DOM step's.
+   [:iframe {:optional true} Selector]
    [:launch-args {:optional true} LaunchArgs]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
@@ -167,11 +255,18 @@
 ;; Mutation — injected behavioural faults
 ;; =============================================================================
 
+(def any-form
+  "Any authored form that is not text: a list, symbol, vector, map, number…
+   Kept apart from strings so a blank string cannot pass as a form."
+  [:fn {:error/message "should be a form"}
+   (fn [x] (and (some? x) (not (string? x))))])
+
 (def Fault
-  "One behavioural fault: source the runtime evaluates to break the live app."
+  "One behavioural fault: a form the runtime evaluates to break the live app.
+   A string is accepted as the escape hatch for reader macros EDN cannot carry."
   [:map {:closed true}
    [:fault/id :keyword]
-   [:fault/form NonBlankString]
+   [:fault/form [:or NonBlankString any-form]]
    [:fault/target {:optional true} :symbol]
    [:fault/doc {:optional true} :string]])
 
@@ -180,6 +275,7 @@
   [:map {:closed true}
    [:fault/id :keyword]
    [:fault/killed? :boolean]
+   [:fault/status {:optional true} [:enum :killed :survived :unapplied]]
    [:fault/by {:optional true} [:vector ScenarioId]]
    [:fault/detail {:optional true} :string]])
 
@@ -189,11 +285,24 @@
    [:mutation/verdicts [:vector FaultVerdict]]
    [:mutation/killed [:vector :keyword]]
    [:mutation/survived [:vector :keyword]]
+   [:mutation/unapplied {:optional true} [:vector :keyword]]
    [:mutation/score [:double {:min 0.0 :max 1.0}]]])
 
 ;; =============================================================================
 ;; Manifest — normalized
 ;; =============================================================================
+
+(def ArtifactSpec
+  "Where a build nobody here ran leaves its output, so its compiles can be
+   observed: `:outputs` are files or directories (relative to the project root)
+   whose change witnesses a compile; a `:ready-marker` is one file the tool
+   touches when it has finished, and when declared it alone is watched."
+  [:map {:closed true}
+   [:outputs {:optional true} [:vector NonBlankString]]
+   [:ready-marker {:optional true} NonBlankString]
+   [:quiet-ms {:optional true} Millis]
+   [:poll-ms {:optional true} [:int {:min 1}]]
+   [:hash? {:optional true} :boolean]])
 
 (def BuildSpec
   [:map {:closed true}
@@ -201,13 +310,18 @@
    [:http-port {:optional true} Port]
    [:entry {:optional true} NonBlankString]
    ;; argv for a toolchain whose build is a command rather than a server
-   [:command {:optional true} [:vector NonBlankString]]])
+   [:command {:optional true} [:vector NonBlankString]]
+   ;; output observed for compiles an external watcher runs
+   [:artifacts {:optional true} ArtifactSpec]])
 
 (def E2eConfig
   [:map {:closed true}
    [:base-url NonBlankString]
    [:browser BrowserEngine]
    [:headless :boolean]
+   ;; X11 WM_CLASS of a HEADED browser window (default "hive-cljs-headed"), so
+   ;; a window manager can send test browsers to their own workspace.
+   [:window-class {:optional true} NonBlankString]
    ;; Accept a TLS certificate the browser cannot verify. For a dev gateway
    ;; behind a self-signed certificate (Envoy in docker compose); never for a
    ;; public origin.
@@ -219,13 +333,20 @@
    ;; composition host (a slide player, a preview pane, an embedded editor)
    ;; renders the application under test in a child document, so `document`
    ;; in the top page is the host's, not the app's. Named :iframe rather than
-   ;; :frame because :frame is already the re-frame2 frame id.
-   [:iframe {:optional true} NonBlankString]
+   ;; :frame because :frame is already the re-frame2 frame id. A Selector:
+   ;; a string, or selector data compiled by `hive-cljs.selector` when the
+   ;; plan is built.
+   [:iframe {:optional true} Selector]
    [:timeout-ms Millis]
    [:poll-ms Millis]
    [:frame {:optional true} :keyword]
    [:app-db-schema {:optional true} :symbol]
    [:app-db-check {:optional true} AppDbCheck]
+   ;; The `host:port` authorities an `[:http {...}]` step may address. The
+   ;; harness's HTTP channel is an escape hatch, so it is closed by default:
+   ;; with no allowlist no :http step plans at all, and a URL off the list is
+   ;; a plan-time :http/host-not-allowed error, never a runtime surprise.
+   [:http-allow {:optional true} [:vector HttpAuthority]]
    [:faults [:vector Fault]]
    [:artifacts-dir NonBlankString]
    [:scenarios [:vector Scenario]]])

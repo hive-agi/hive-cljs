@@ -15,7 +15,8 @@
             [clojure.data.json :as json]
             [hive-cljs.coverage :as coverage]
             [clojure.walk :as walk]
-            [hive-cljs.step :as step])
+            [hive-cljs.step :as step]
+            [hive-cljs.http :as http])
   (:import [java.io PushbackReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -272,13 +273,15 @@
 ;; =============================================================================
 
 (def wait-kinds
-  "Runtime steps that poll a condition instead of asserting it once.
-
-   Defined by the step vocabulary, not here: a new stack's kinds must not need
-   an edit to the boundary."
+  "FALLBACK: runtime kinds that poll a condition instead of asserting it once,
+   for an op carrying no `:op/poll?`. A compiled op says so itself."
   step/poll-kinds)
 
-(defn wait-op? [op] (contains? wait-kinds (:op/kind op)))
+(defn wait-op?
+  "True when `op` polls — read off the op, which its rule stamped, so a new
+   stack's kinds need no edit here."
+  [op]
+  (step/poll-op? op))
 
 (def default-wait-timeout-ms 15000)
 (def default-poll-ms 250)
@@ -332,7 +335,7 @@
 
 (defn- assertion-op?
   [op]
-  (contains? step/assertion-kinds (:op/kind op)))
+  (step/assertion-op? op))
 
 (defn perform-runtime!
   "Execute a :runtime op through ICljsEval. Returns an outcome map.
@@ -381,10 +384,8 @@
 ;; =============================================================================
 
 (def read-only-kinds
-  "Steps that only observe — nothing they do can corrupt app-db."
-  #{:expect-text :expect-value :expect-visible :expect-hidden :expect-count
-    :expect-attr :expect-url :expect-sub :expect-db :expect-fits :wait-for
-    :wait-for-sub :wait-for-db :wait-ms :screenshot})
+  "FALLBACK: steps that only observe, for an op carrying no `:op/read-only?`."
+  step/read-only-kinds)
 
 (defn invariant-applies?
   "True when the configured app-db invariant should be asserted after `op`."
@@ -393,7 +394,7 @@
    (and app-db-schema
         (case (or app-db-check :every-step)
           :final     last?
-          :mutations (not (contains? read-only-kinds (:op/kind op)))
+          :mutations (not (step/read-only-op? op))
           true))))
 
 (defn check-invariant!
@@ -460,11 +461,61 @@
       (swap! state assoc :binding outcome)
       outcome)))
 
+;; =============================================================================
+;; HTTP-channel execution — the harness acts out of band
+;; =============================================================================
+
+(defn perform-http!
+  "Execute an :http-channel op through `ports/IHttpChannel`. Returns
+   `[outcome last-response]`: a request op yields the decoded response as the
+   new last one; an assertion op (`step/assertion-op?`) judges `last` and
+   leaves it as it was.
+
+   No channel is `:incomplete`, never a pass. A request that got no response
+   at all is an `:error`; ANY status is a passing request — whether it was the
+   right one is what `:expect-http` is for."
+  [channel op last {:keys [timeout-ms]}]
+  (cond
+    (step/assertion-op? op)
+    [(http/judge (first (:op/args op)) last) last]
+
+    (nil? channel)
+    [{:state :incomplete
+      :detail "no HTTP channel connected, so the harness could not make this request"}
+     last]
+
+    :else
+    (let [spec    (first (:op/args op))
+          req     (http/build-request spec timeout-ms)
+          started (System/currentTimeMillis)
+          res     (ports/request! channel req)
+          elapsed (- (System/currentTimeMillis) started)
+          decoded (when (r/ok? res) (http/decode-response (:as spec) (:ok res)))]
+      (cond
+        (r/err? res)
+        [{:state :error :detail (pr-str res) :elapsed-ms elapsed} nil]
+
+        (r/err? decoded)
+        [{:state :error :detail (pr-str decoded) :elapsed-ms elapsed} nil]
+
+        :else
+        [{:state :pass
+          :detail (str (name (:method req)) " " (:url req) " → " (:status (:ok decoded)))
+          :elapsed-ms elapsed}
+         (:ok decoded)]))))
+
 (defn- outcome-of
   [{:keys [driver cljs-eval] :as deps} state session build-id token rt op]
-  (if (= :runtime (:op/channel op))
+  (case (:op/channel op)
+    :runtime
     (or (when (and token cljs-eval) (runtime-binding deps state build-id token))
         (perform-runtime! cljs-eval build-id op rt))
+
+    :http
+    (let [[outcome last] (perform-http! (:http deps) op (:http/last @state) rt)]
+      (swap! state assoc :http/last last)
+      outcome)
+
     (let [res (ports/perform! driver session op)]
       (if (r/err? res) {:state :error :detail (pr-str res)} (:ok res)))))
 
@@ -564,21 +615,26 @@
   (or (first (filter #(= :goto (:op/kind %)) (:plan/ops plan)))
       {:op/kind :goto :op/channel :browser
        :op/args [(:plan/base-url plan)]
+       :op/assert? false :op/poll? false :op/read-only? false
        :op/source [:goto (:plan/base-url plan)]}))
 
 (defn probe-runtime!
-  "Navigate to the app and evaluate `form-str` in the page that opens.
+  "Navigate to the app and evaluate `form` in the page that opens.
 
    Returns a Result of the value. There is no running app to interrogate until
    something has navigated to it, so a probe cannot be a bare eval — it needs a
-   page, and it needs the runtime pinned to that page like any other run."
-  [deps plan form-str]
+   page, and it needs the runtime pinned to that page like any other run.
+
+   `form` stays a FORM all the way to the runtime channel, which is the one
+   place it becomes source text."
+  [deps plan form]
   (let [probe (assoc plan
                      :plan/scenario :hive-cljs/probe
                      :plan/ops [(goto-op plan)
                                 {:op/kind :eval-cljs :op/channel :runtime
-                                 :op/args [form-str]
-                                 :op/source [:eval-cljs form-str]}])
+                                 :op/args [form]
+                                 :op/assert? false :op/poll? false :op/read-only? false
+                                 :op/source [:eval-cljs form]}])
         res   (run-plan! deps probe)]
     (if (r/err? res)
       res
@@ -637,6 +693,21 @@
                :run/steps [] :run/error res})))
         plans))
 
+(defn- run-faulted!
+  "Run every plan with `f` injected, marking each report with whether the fault
+   was actually applied. A plan whose app page cannot be determined is not run
+   at all — its fault is unapplied there, not killed."
+  [deps plans f]
+  (mapv (fn [p]
+          (if-not (mutation/injectable? p)
+            {:run/scenario (:plan/scenario p) :run/state :incomplete
+             :run/steps [] :fault/applied? false}
+            (let [injected (mutation/inject p f)
+                  rep      (first (run-plans! deps [injected]))]
+              (assoc rep :fault/applied?
+                     (mutation/applied? rep (mutation/fault-index injected f))))))
+        plans))
+
 (defn run-mutations!
   "Score `plans` against a fault catalog: each fault is injected, the suite is
    re-run, and a suite that stays GREEN failed to notice it.
@@ -660,9 +731,7 @@
                 :summary (mapv verdict/summarize baseline)})
         (r/ok (mutation/report
                (mapv :plan/scenario plans)
-               (mapv (fn [f]
-                       (mutation/verdict
-                        f (run-plans! deps (mapv #(mutation/inject % f) plans))))
+               (mapv (fn [f] (mutation/verdict f (run-faulted! deps plans f)))
                      faults)))))))
 
 ;; =============================================================================

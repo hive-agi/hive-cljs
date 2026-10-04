@@ -3,12 +3,17 @@
    long-lived server to ask.
 
    `elm make`, `vite build`, `tsc`, an npm script: anything with an exit code is
-   a build verdict. What this cannot do is NOTICE a build it did not run, so its
-   events fire for compiles driven through hive-cljs and not for an external
-   `vite --watch`. That is a real limit and is reported as one rather than
-   papered over with a poller that would invent a verdict between file writes."
+   a build verdict, and a compile run through `compile-once!` emits an event.
+
+   A compile it did NOT run — an external `vite --watch`, `elm-live` — is seen
+   only through the output it leaves: a build declaring `:artifacts` is
+   observed by `hive-cljs.build.observe` while anyone is subscribed, and a
+   change to that output emits the same `BuildEvent`. A build declaring none is
+   still blind to external compiles, and that is reported rather than papered
+   over with a poller that would invent a verdict between file writes."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [hive-cljs.build.observe :as observe]
             [hive-cljs.ports :as ports]
             [hive-dsl.result :as r])
   (:import [java.util List]))
@@ -66,18 +71,24 @@
      :build/files       []
      :build/duration-ms elapsed-ms}))
 
+(defn- publish!
+  "Remember `event`'s status and hand the event to every subscriber."
+  [state-ref event]
+  (swap! state-ref assoc-in [:statuses (:event/build event)] (:event/status event))
+  (doseq [[_ f] (:subs @state-ref)]
+    (try (f event) (catch Throwable _ nil)))
+  event)
+
 (defn- notify!
   [state-ref id status]
-  (let [event {:event/build id :event/status status
-               :event/at (System/currentTimeMillis)}]
-    (doseq [[_ f] (:subs @state-ref)]
-      (try (f event) (catch Throwable _ nil)))
-    event))
+  (publish! state-ref {:event/build id :event/status status
+                       :event/at (System/currentTimeMillis)}))
 
-(defrecord ProcessBuildTool [root commands state-ref exec-fn]
+(defrecord ProcessBuildTool [root commands state-ref exec-fn observer]
   ports/IBuildTool
 
-  (builds [_] (r/ok (vec (keys commands))))
+  (builds [_]
+    (r/ok (vec (distinct (concat (keys commands) (keys (:specs observer)))))))
 
   (build-status [_ id]
     (r/ok (or (get-in @state-ref [:statuses id]) (unknown-status id))))
@@ -85,12 +96,17 @@
   (compile-once! [_ id]
     (if-let [argv (get commands id)]
       (let [started (System/currentTimeMillis)]
-        (r/bind (exec-fn argv root)
-                (fn [result]
-                  (let [status (status-of id result (- (System/currentTimeMillis) started))]
-                    (swap! state-ref assoc-in [:statuses id] status)
-                    (notify! state-ref id status)
-                    (r/ok status)))))
+        ;; the output this compile writes is reported by its exit code, so the
+        ;; observer must not report it a second time
+        (when observer (observe/suspend! observer id))
+        (try
+          (r/bind (exec-fn argv root)
+                  (fn [result]
+                    (let [status (status-of id result (- (System/currentTimeMillis) started))]
+                      (notify! state-ref id status)
+                      (r/ok status))))
+          (finally
+            (when observer (observe/resume! observer id)))))
       (r/err :build/no-command
              {:build id
               :declared (vec (keys commands))
@@ -98,17 +114,36 @@
 
   (subscribe! [_ k f]
     (swap! state-ref assoc-in [:subs k] f)
+    ;; output is sampled only while somebody listens for what it would say
+    (when observer (observe/start! observer))
     (r/ok k))
 
   (unsubscribe! [_ k]
-    (swap! state-ref update :subs dissoc k)
+    (let [subs (:subs (swap! state-ref update :subs dissoc k))]
+      (when (and observer (empty? subs)) (observe/stop! observer)))
     (r/ok k)))
+
+(defn close!
+  "Stop observing output. Idempotent; never throws."
+  [^ProcessBuildTool bt]
+  (when-let [obs (:observer bt)]
+    (try (observe/stop! obs) (catch Throwable _ nil)))
+  nil)
 
 (defn build-tool
   "A build tool over `commands` — `{build-id argv}` — run with `root` as cwd.
 
    `exec-fn` is injectable so the orchestration is testable without spawning a
-   process."
+   process. `opts` may carry `:artifacts` — `{build-id artifact-spec}` — to
+   observe compiles run outside hive-cljs, sampled through the `:stamps`
+   (`IFileStamps`) and `:clock` (`IClock`) ports, both defaulting to the real
+   ones."
   ([root commands] (build-tool root commands exec!))
-  ([root commands exec-fn]
-   (->ProcessBuildTool root commands (atom {:statuses {} :subs {}}) exec-fn)))
+  ([root commands exec-fn] (build-tool root commands exec-fn {}))
+  ([root commands exec-fn {:keys [artifacts stamps clock]}]
+   (let [state-ref (atom {:statuses {} :subs {}})
+         obs       (when (seq artifacts)
+                     (observe/observer root artifacts
+                                       (fn [event] (publish! state-ref event))
+                                       {:stamps stamps :clock clock}))]
+     (->ProcessBuildTool root commands state-ref exec-fn obs))))

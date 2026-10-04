@@ -91,8 +91,10 @@
 (defprotocol ICljsEval
   "Evaluate ClojureScript inside the running application runtime."
 
-  (eval-cljs [this build-id form-str]
-    "Evaluate form-str in build-id's runtime.
+  (eval-cljs [this build-id form]
+    "Evaluate `form` in build-id's runtime. `form` is a form or source text;
+     the adapter prints a form ONCE, under pinned printer vars
+     (`hive-cljs.dialect.source/pr-source`), at its own edge.
      Returns a Result of {:value <edn> :printed str}.")
 
   (runtime-available? [this build-id]
@@ -149,15 +151,15 @@
    first for any application and the second for none."
 
   (invariant-source [this schema frame]
-    "Source text validating the whole application state against `schema`,
+    "Form validating the whole application state against `schema`,
      yielding nil when it conforms.")
 
   (registry-source [this kinds]
-    "Source text reading the app's registered handler ids for `kinds` in ONE
+    "Form reading the app's registered handler ids for `kinds` in ONE
      round trip: `{kind [id …] …}`.")
 
   (neutralize-source [this kind id]
-    "Source text re-registering handler `id` of `kind` as a no-op."))
+    "Form re-registering handler `id` of `kind` as a no-op."))
 
 (defprotocol ISessionBound
   "Optional: a runtime channel that evaluates INSIDE the browser session the
@@ -179,6 +181,29 @@
      The channel owns its contract, so the boundary can install it without
      knowing what it says — and an application wires itself to that contract
      with a guarded one-liner rather than a dependency."))
+
+;; =============================================================================
+;; IHttpChannel — the harness's own out-of-band channel
+;; =============================================================================
+
+(defprotocol IHttpChannel
+  "Make one HTTP request FROM THE HARNESS, not from the page.
+
+   The third channel beside the browser and the runtime. It exists so a
+   scenario can play an out-of-band actor — pay an invoice, mine a block, move
+   a clock — without navigating the driven page to another origin, which would
+   discard the runtime pinned to it.
+
+   The adapter is a dumb wire: request building, the host allowlist and the
+   judging of a response are pure (`hive-cljs.http`) and happen before and
+   after it. It never sees a request the plan did not admit."
+
+  (request! [this req]
+    "Send `req`, a `schema/HttpWire` (method, absolute url, string headers, an
+     already-encoded string body, timeout-ms), and return a Result of
+     `{:status int :headers {name value} :body string}`. Any HTTP status is
+     an ok — judging it is the scenario's business; only a request that got
+     no response at all is an err."))
 
 ;; =============================================================================
 ;; IToolchain — how one frontend stack's channels are opened and released
@@ -206,6 +231,24 @@
 
   (close-runtime! [this runtime]
     "Release a runtime channel this toolchain opened. Idempotent; never throws."))
+
+;; =============================================================================
+;; IFileStamps / IClock — what an artifact observer samples
+;; =============================================================================
+
+(defprotocol IFileStamps
+  "Read filesystem facts. The seam an artifact observer samples through, so
+   the decision over them is testable against a filesystem that is a map."
+
+  (file-stamps [this root paths opts]
+    "Return `{path {:modified :size :hash?}}` for every regular file at or under
+     each of `paths` (relative to `root`), keyed by its root-relative path. A
+     path that does not exist contributes nothing. `opts` may carry
+     `:hash? true` to add a content `:hash`. Never throws."))
+
+(defprotocol IClock
+  "Read the time."
+  (now-ms [this] "Current time in epoch millis."))
 
 ;; =============================================================================
 ;; IFitSource — where fit measurements come from
@@ -268,7 +311,11 @@
 
 (defn page-bootstrap? [x] (satisfies? IPageBootstrap x))
 
+(defn http-channel? [x] (satisfies? IHttpChannel x))
+
 (defn toolchain? [x] (satisfies? IToolchain x))
+(defn file-stamps? [x] (satisfies? IFileStamps x))
+(defn clock? [x] (satisfies? IClock x))
 
 (defn fit-source? [x] (satisfies? IFitSource x))
 (defn fit-universe? [x] (satisfies? IFitUniverse x))

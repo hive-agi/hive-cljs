@@ -16,6 +16,8 @@
    `installer`, the probe that answers them. Rendering is portable; loading the
    probe off the classpath is not, so only that part is JVM-side."
   (:require [clojure.string :as str]
+            [hive-cljs.dialect.probe :as probe]
+            [hive-cljs.dialect.source :as src]
             #?(:clj [clojure.java.io :as io])))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -23,9 +25,43 @@
 ;; SPDX-License-Identifier: MIT
 
 (defn expr
-  "Source text an authored argument contributes."
-  [x]
-  (if (string? x) x (pr-str x)))
+  "Source text an authored argument contributes.
+
+   A string is JavaScript already and passes through verbatim — the escape
+   hatch. A bare dotted symbol (`window.app.ready`) has always passed through as
+   its own name and still does. Anything else is a probe FORM, rendered by
+   `hive-cljs.dialect.probe`, so a manifest need never carry a JS string blob.
+
+   `locals` names symbols the surrounding expression binds — `v` for a state
+   predicate."
+  ([x] (expr x {}))
+  ([x locals]
+   (cond
+     (string? x) x
+     (and (symbol? x) (nil? (namespace x)) (not (contains? locals x))
+          (re-matches #"^[A-Za-z_$][A-Za-z0-9_$.]*$" (name x)))
+     (name x)
+     :else (probe/->js x locals))))
+
+(def state-locals
+  "Locals a `:expect-state` / `:wait-for-state` predicate sees."
+  {'v "v"})
+
+(defn state-pred
+  "Source of a state predicate. A FUNCTION form (`some?`, `(fn [x] …)`) is
+   applied to the read value, the way the re-frame dialect applies its
+   predicates; anything else is an expression over `v`."
+  [pred]
+  (if (probe/fn-form? pred)
+    (probe/->js (list pred 'v) state-locals)
+    (expr pred state-locals)))
+
+(defn- raw
+  "Locals carrying JavaScript the caller already rendered (an authored string,
+   a predicate over `v`). A local is spliced as written, so each is
+   parenthesised to stay one operand whatever operators it holds."
+  [m]
+  (update-vals m #(str "(" % ")")))
 
 (defn truthy-value
   "JS yielding the VALUE when it is truthy and false when it is not.
@@ -34,7 +70,7 @@
    JavaScript falsiness is not Clojure falsiness — 0 and \"\" are failures here
    and would both survive a `some?` check on the way back."
   [source]
-  (str "(() => { const v = (" source "); return v ? v : false; })()"))
+  (probe/->js '(let [v src] (if v v false)) (raw {'src source}) {:pin #{'v}}))
 
 (defn truthy-probe
   "JS yielding `[truthy? value]` — the polled counterpart of `truthy-value`.
@@ -42,7 +78,7 @@
    The value rides along so a timeout can say 'never happened' apart from 'not
    yet'; the array reads back as a Clojure vector."
   [source]
-  (str "(() => { const v = (" source "); return [!!v, v]; })()"))
+  (probe/->js '(let [v src] [(boolean v) v]) (raw {'src source}) {:pin #{'v}}))
 
 ;; =============================================================================
 ;; The probe contract — installed by the run, not imported by the app
@@ -80,10 +116,10 @@
 (defn- json-scalar
   [x]
   (cond
-    (keyword? x) (pr-str (name x))
-    (string? x)  (pr-str x)
+    (keyword? x) (src/pr-source (name x))
+    (string? x)  (src/pr-source x)
     (number? x)  (str x)
-    :else        (pr-str (str x))))
+    :else        (src/pr-source (str x))))
 
 (defn json-path
   "A path vector as a JSON array literal. Segments are identifiers and indices,
@@ -101,20 +137,28 @@
    mistake — the probe itself reports this, listing what was), or the value is
    genuinely absent (an ordinary assertion failure, which reads null)."
   [path]
-  (str "(() => { if (!window." probe-key ") throw new Error("
-       (pr-str probe-missing-message) "); return window." probe-key ".read("
-       (json-path path) "); })()"))
+  (let [probe-sym (symbol "js" (str "window." probe-key))
+        segment   (fn [x] (cond (keyword? x) (name x)
+                                (or (string? x) (number? x)) x
+                                :else (str x)))]
+    (probe/->js (list 'if probe-sym
+                      (list '.read probe-sym (mapv segment path))
+                      (list 'throw probe-missing-message)))))
 
 (defn state-assertion
   "Assert `pred` — a JS expression over the bound `v` — against the value at
    `path`. Yields the value when it holds, false when it does not."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return (" (expr pred) ") ? v : false; })()"))
+  (probe/->js '(let [v value] (if held v false))
+              (raw {'value (read-source path) 'held (state-pred pred)})
+              {:pin #{'v}}))
 
 (defn state-probe
   "The polled counterpart of `state-assertion`: `[held? value]`."
   [path pred]
-  (str "(() => { const v = " (read-source path) "; return [!!(" (expr pred) "), v]; })()"))
+  (probe/->js '(let [v value] [(boolean held) v])
+              (raw {'value (read-source path) 'held (state-pred pred)})
+              {:pin #{'v}}))
 
 (defn fits-source
   "JS asking whether everything `selector` matches stays inside its box.
@@ -138,32 +182,45 @@
    happy."
   ([selector] (fits-source selector 1))
   ([selector tolerance]
-   (let [sel (pr-str selector)]
-     (str "(() => {\n"
-          "  const tol = " (double tolerance) ";\n"
-          "  const sel = " sel ";\n"
-          "  const els = Array.from(document.querySelectorAll(sel));\n"
-          "  if (!els.length) throw new Error('expect-fits: nothing matches ' + sel);\n"
-          "  const vw = window.innerWidth;\n"
-          "  let measured = 0, over = 0;\n"
-          "  for (const el of els) {\n"
-          "    const r = el.getBoundingClientRect();\n"
-          "    if (!(r.width > 0) || !(r.height > 0)) continue;\n"
-          "    measured++;\n"
-          "    if (r.right > vw + tol || r.left < -tol) { over++; continue; }\n"
-          "    if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + tol) over++;\n"
-          "  }\n"
-          "  if (!measured) throw new Error('expect-fits: ' + els.length +\n"
-          "    ' element(s) match ' + sel + ' and none has a rectangle');\n"
-          "  return over ? false : measured;\n"
-          "})()"))))
+   (probe/->js
+    '(let [els (dom/all sel)]
+       (if (zero? (count els))
+         (throw (new js/Error (str "expect-fits: nothing matches " sel)))
+         (let [vw (.-innerWidth js/window)]
+           (loop [i 0 measured 0 over 0]
+             (if (< i (count els))
+               (let [el (aget els i)
+                     r  (.getBoundingClientRect el)]
+                 (cond
+                   (not (and (> (.-width r) 0) (> (.-height r) 0)))
+                   (recur (inc i) measured over)
+
+                   (or (> (.-right r) (+ vw tol)) (< (.-left r) (- tol)))
+                   (recur (inc i) (inc measured) (inc over))
+
+                   (and (> (.-clientWidth el) 0)
+                        (> (.-scrollWidth el) (+ (.-clientWidth el) tol)))
+                   (recur (inc i) (inc measured) (inc over))
+
+                   :else
+                   (recur (inc i) (inc measured) over)))
+               (cond
+                 (zero? measured)
+                 (throw (new js/Error (str "expect-fits: " (count els)
+                                           " element(s) match " sel
+                                           " and none has a rectangle")))
+                 (pos? over) false
+                 :else measured))))))
+    {'sel (src/pr-source (str selector))
+     'tol (str "(" (double tolerance) ")")})))
 
 ;; =============================================================================
 ;; Contrast sampling
 ;; =============================================================================
 
-(def ^:private backdrop-js
-  "JS collecting an element's background LAYERS and the opacity above them.
+(def ^:private backdrop-form
+  "Probe form of a function collecting an element's background LAYERS and the
+   opacity above them.
 
    Returns `[layers, opacity]`: every background an ancestor paints, innermost
    first, up to and including the first opaque one, and the product of the
@@ -173,28 +230,56 @@
    is neither of those two colours; opacity separately, because a computed
    `color` does not carry it. Both are folded in `contrast`, not here: this
    side of the boundary collects, it does not decide."
-  (str "const __hcBackdrop = (el) => {\n"
-       "  const layers = [];\n"
-       "  let opacity = 1;\n"
-       "  let n = el;\n"
-       "  while (n) {\n"
-       "    const cs = getComputedStyle(n);\n"
-       "    const o = parseFloat(cs.opacity);\n"
-       "    const c = cs.backgroundColor;\n"
-       "    const m = c && c.match(/^rgba?\\(([^)]+)\\)/);\n"
-       "    let a = 0;\n"
-       "    if (m) {\n"
-       "      const p = m[1].split(/[,\\/\\s]+/).filter(s => s.length);\n"
-       "      a = p.length > 3 ? parseFloat(p[3]) : 1;\n"
-       "      if (a > 0) layers.push(c);\n"
-       "    }\n"
-       "    if (a >= 1) return [layers, opacity];\n"
-       "    if (o >= 0 && o < 1) opacity *= o;\n"
-       "    n = n.parentElement;\n"
-       "  }\n"
-       "  const root = getComputedStyle(document.documentElement).backgroundColor;\n"
-       "  return [layers.concat([root]), opacity];\n"
-       "};\n"))
+  '(fn [el]
+     (loop [n el layers [] opacity 1]
+       (if n
+         (let [cs (js/getComputedStyle n)
+               o  (js/parseFloat (.-opacity cs))
+               c  (.-backgroundColor cs)
+               m  (and c (re-find #"^rgba?\(([^)]+)\)" c))
+               a  (if m
+                    (let [p (filter (fn [s] (pos? (count s)))
+                                    (.split (nth m 1) #"[,/\s]+"))]
+                      (if (> (count p) 3) (js/parseFloat (nth p 3)) 1))
+                    0)
+               layers (if (> a 0) (conj layers c) layers)]
+           (if (>= a 1)
+             [layers opacity]
+             (recur (.-parentElement n)
+                    layers
+                    (if (and (>= o 0) (< o 1)) (* opacity o) opacity))))
+         [(conj layers (.-backgroundColor
+                        (js/getComputedStyle (.-documentElement js/document))))
+          opacity]))))
+
+(def ^:private rows-form
+  "Probe form collecting the rows for `specs`, given `backdrop`."
+  '(mapcat
+    (fn [spec]
+      (let [els (try (.slice (dom/all (get spec :selector)) 0 (get spec :limit))
+                     (catch :default e nil))]
+        (if (nil? els)
+          [[(str (get spec :id) "-selector") nil nil (get spec :role) nil false 1]]
+          (keep-indexed
+           (fn [i el]
+             (let [cs   (js/getComputedStyle el)
+                   b    (backdrop el)
+                   id   (str (get spec :id) "-" i)
+                   side (get spec :side)]
+               (if (= (get spec :role) "non-text")
+                 (let [w (js/parseFloat (get cs (str "border" side "Width")))]
+                   (when-not (or (= (get cs (str "border" side "Style")) "none")
+                                 (not (> w 0)))
+                     [id (get cs (str "border" side "Color")) (nth b 0)
+                      "non-text" nil false (nth b 1)]))
+                 (when-not (or (not (.-textContent el))
+                               (not (.trim (.-textContent el))))
+                   [id (.-color cs) (nth b 0) nil
+                    (js/parseFloat (.-fontSize cs))
+                    (>= (js/parseInt (.-fontWeight cs) 10) 700)
+                    (nth b 1)]))))
+           els))))
+    specs))
 
 (defn- side-name
   "A border side as the computed-style property spells it: `Top`, `Left`, ..."
@@ -202,12 +287,15 @@
   (let [s (name (or side :top))]
     (str (str/upper-case (subs s 0 1)) (str/lower-case (subs s 1)))))
 
-(defn- spec-literal [{:keys [id selector role side limit]}]
-  (str "{id:" (json-scalar (name (or id :sample)))
-       ",selector:" (json-scalar selector)
-       ",role:" (if (= :non-text role) (json-scalar "non-text") "null")
-       ",side:" (json-scalar (side-name side))
-       ",limit:" (long (or limit 10)) "}"))
+(defn- spec-literal
+  "One spec as the map the page reads. Strings throughout, so the probe
+   renders each as its own string literal."
+  [{:keys [id selector role side limit]}]
+  {:id       (name (or id :sample))
+   :selector (str selector)
+   :role     (when (= :non-text role) "non-text")
+   :side     (side-name side)
+   :limit    (long (or limit 10))})
 
 (defn contrast-rows-source
   "JS collecting contrast rows for `specs` out of the page a session is driving.
@@ -227,39 +315,9 @@
    selector the browser rejects, which is reported as one unresolvable row
    instead of aborting every other spec."
   [specs]
-  (str "(() => {\n"
-       backdrop-js
-       "  const out = [];\n"
-       "  const specs = [" (str/join "," (map spec-literal specs)) "];\n"
-       "  for (const spec of specs) {\n"
-       "    let els;\n"
-       "    try {\n"
-       "      els = Array.from(document.querySelectorAll(spec.selector))\n"
-       "        .slice(0, spec.limit);\n"
-       "    } catch (e) {\n"
-       "      out.push([spec.id + '-selector', null, null, spec.role, null, false, 1]);\n"
-       "      continue;\n"
-       "    }\n"
-       "    els.forEach((el, i) => {\n"
-       "      const cs = getComputedStyle(el);\n"
-       "      const backdrop = __hcBackdrop(el);\n"
-       "      const id = spec.id + '-' + i;\n"
-       "      if (spec.role === 'non-text') {\n"
-       "        const w = parseFloat(cs['border' + spec.side + 'Width']);\n"
-       "        if (cs['border' + spec.side + 'Style'] === 'none' || !(w > 0)) return;\n"
-       "        out.push([id, cs['border' + spec.side + 'Color'], backdrop[0],\n"
-       "                  'non-text', null, false, backdrop[1]]);\n"
-       "      } else {\n"
-       "        if (!el.textContent || !el.textContent.trim()) return;\n"
-       "        out.push([id, cs.color, backdrop[0], null,\n"
-       "                  parseFloat(cs.fontSize),\n"
-       "                  parseInt(cs.fontWeight, 10) >= 700,\n"
-       "                  backdrop[1]]);\n"
-       "      }\n"
-       "    });\n"
-       "  }\n"
-       "  return out;\n"
-       "})()"))
+  (probe/->js (list 'let ['backdrop backdrop-form
+                          'specs    (mapv spec-literal specs)]
+                    rows-form)))
 
 ;; =============================================================================
 ;; Op → source

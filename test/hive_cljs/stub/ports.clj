@@ -5,7 +5,8 @@
    namespace names a build toolchain or a browser."
   (:require [hive-cljs.ports :as ports]
             [hive-dsl.result :as r]
-            [hive-cljs.dialect.re-frame :as re-frame]))
+            [hive-cljs.dialect.re-frame :as re-frame]
+            [hive-cljs.dialect.source :as source]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -145,12 +146,14 @@
 
 (defrecord StubCljsEval [state-ref value-fn]
   ports/ICljsEval
-  (eval-cljs [_ build-id form-str]
+  (eval-cljs [_ build-id form]
+    ;; A channel adapter: the one place a form becomes source text.
+    (let [form-str (source/form->string form)]
     (swap! state-ref update :evals conj [build-id form-str])
     (let [v (value-fn build-id form-str)]
       (if (and (map? v) (contains? v :error))
         v
-        (r/ok {:value v :printed ""}))))
+        (r/ok {:value v :printed ""})))))
 
   (runtime-available? [_ _] true)
 
@@ -191,12 +194,14 @@
 
 (defrecord StubCljsEvalNoAffinity [state-ref value-fn]
   ports/ICljsEval
-  (eval-cljs [_ build-id form-str]
+  (eval-cljs [_ build-id form]
+    ;; A channel adapter: the one place a form becomes source text.
+    (let [form-str (source/form->string form)]
     (swap! state-ref update :evals conj [build-id form-str])
     (let [v (value-fn build-id form-str)]
       (if (and (map? v) (contains? v :error))
         v
-        (r/ok {:value v :printed ""}))))
+        (r/ok {:value v :printed ""})))))
 
   (runtime-available? [_ _] true)
 
@@ -231,9 +236,11 @@
 
 (defrecord StubCljsEvalNoDialect [state-ref value-fn]
   ports/ICljsEval
-  (eval-cljs [_ build-id form-str]
+  (eval-cljs [_ build-id form]
+    ;; A channel adapter: the one place a form becomes source text.
+    (let [form-str (source/form->string form)]
     (swap! state-ref update :evals conj [build-id form-str])
-    (r/ok {:value (value-fn build-id form-str) :printed ""}))
+    (r/ok {:value (value-fn build-id form-str) :printed ""})))
 
   (runtime-available? [_ _] true))
 
