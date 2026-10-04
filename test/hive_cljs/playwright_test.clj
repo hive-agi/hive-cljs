@@ -45,6 +45,17 @@
         (is (= :browser/iframe-unresolved (:error res)))
         (is (= "#missing" (:selector res)))))))
 
+(deftest launch-args-reach-the-browser-process-options
+  (is (= ["--use-fake-device-for-media-stream"]
+         (vec (.-args (pw/launch-options :chromium true nil ["--use-fake-device-for-media-stream"])))))
+  (is (true? (.-headless (pw/launch-options :chromium true nil nil))))
+  (is (nil? (.-args (pw/launch-options :chromium false nil [])))
+      "no switches leaves Playwright's own defaults untouched")
+  (is (= ["--use-fake-device-for-media-stream" "--class=tests"]
+         (vec (.-args (pw/launch-options :chromium false "tests" ["--use-fake-device-for-media-stream"])))))
+  (is (= ["--use-fake-device-for-media-stream"]
+         (vec (.-args (pw/launch-options :webkit false "tests" ["--use-fake-device-for-media-stream"]))))))
+
 ;; =============================================================================
 ;; Selector data never reaches Playwright as data
 ;; =============================================================================

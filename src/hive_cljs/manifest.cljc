@@ -134,6 +134,7 @@
     (contains? raw :has-touch) (assoc :has-touch (:has-touch raw))
     (:device-scale-factor raw) (assoc :device-scale-factor (:device-scale-factor raw))
     (:iframe raw)   (assoc :iframe (:iframe raw))
+    (contains? raw :launch-args) (assoc :launch-args (vec (:launch-args raw)))
     (:doc raw)      (assoc :doc (:doc raw))
     (seq (:tags raw)) (assoc :tags (set (:tags raw)))))
 
@@ -211,7 +212,7 @@
             :scenarios     (expand-matrix entries matrix)
             :faults        (mutation/normalize-faults (:faults raw))}
            (select-keys raw [:browser :headless :timeout-ms :poll-ms :frame
-                             :ignore-https-errors :viewport :iframe :window-class
+                             :ignore-https-errors :viewport :iframe :window-class :launch-args
                              :app-db-schema :app-db-check])
            (when (contains? raw :http-allow) {:http-allow (vec (:http-allow raw))})
            (when (seq matrix) {:matrix matrix}))))

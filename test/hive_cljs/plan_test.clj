@@ -185,6 +185,30 @@
     (is (= [:login] (mapv :plan/scenario (:ok res)))))
   (is (= :scenario/none-matched (:error (plan/plans-for-tags fix/manifest #{:nope})))))
 
+(deftest launch-args-reach-the-session-and-a-scenario-replaces-them
+  (let [fake    ["--use-fake-device-for-media-stream" "--use-fake-ui-for-media-stream"]
+        m       (:ok (manifest/parse
+                      (-> fix/raw
+                          (assoc-in [:hive.cljs/e2e :launch-args] fake)
+                          (assoc-in [:hive.cljs/e2e :scenarios]
+                                    [{:id :herda :steps [[:goto "/"]]}
+                                     {:id :nega :launch-args ["--deny-permission-prompts"]
+                                      :steps [[:goto "/"]]}
+                                     {:id :limpa :launch-args [] :steps [[:goto "/"]]}]))
+                      "/tmp/x"))
+        session (fn [id] (:plan/session (:ok (plan/plan-for-id m id))))]
+    (is (m/validate s/Manifest m) (pr-str (m/explain s/Manifest m)))
+    (testing "a scenario declaring none inherits the manifest's"
+      (is (= fake (:launch-args (session :herda)))))
+    (testing "a scenario's own switches replace the manifest's"
+      (is (= ["--deny-permission-prompts"] (:launch-args (session :nega)))))
+    (testing "an empty vector launches with no switches at all"
+      (is (not (contains? (session :limpa) :launch-args))))
+    (testing "a manifest without the knob puts none in the session"
+      (is (not (contains? (:plan/session (:ok (plan/build-plan fix/manifest {:id :x :steps [[:goto "/"]]})))
+                          :launch-args))))
+    (is (m/validate s/RunPlan (:ok (plan/plan-for-id m :nega))))))
+
 ;; =============================================================================
 ;; :iframe as selector DATA
 ;; =============================================================================
