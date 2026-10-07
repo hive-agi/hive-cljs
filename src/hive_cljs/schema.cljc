@@ -211,6 +211,11 @@
    [:width [:int {:min 1}]]
    [:height [:int {:min 1}]]])
 
+(def LaunchArgs
+  "Command-line switches the browser process is launched with. A scenario's
+   vector replaces the manifest's, including an empty vector."
+  [:vector NonBlankString])
+
 (def DeviceScaleFactor
   [:and [:or :int :double]
    [:fn {:error/message "device scale factor must be positive"} pos?]])
@@ -241,6 +246,7 @@
    [:device-scale-factor {:optional true} DeviceScaleFactor]
    ;; A selector — string or selector data — like every DOM step's.
    [:iframe {:optional true} Selector]
+   [:launch-args {:optional true} LaunchArgs]
    [:tags {:optional true} [:set :keyword]]
    [:doc {:optional true} :string]
    [:steps [:vector {:min 1} Step]]])
@@ -321,6 +327,7 @@
    ;; public origin.
    [:ignore-https-errors {:optional true} :boolean]
    [:viewport {:optional true} Viewport]
+   [:launch-args {:optional true} LaunchArgs]
    [:matrix {:optional true} [:map-of :keyword PlatformSpec]]
    ;; Selector for an iframe that runtime JavaScript is evaluated INSIDE. A
    ;; composition host (a slide player, a preview pane, an embedded editor)

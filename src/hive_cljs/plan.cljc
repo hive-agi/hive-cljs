@@ -61,6 +61,13 @@
       (:iframe e2e)   (assoc :iframe (:iframe e2e))
       (:window-class e2e) (assoc :window-class (:window-class e2e)))))
 
+(defn launch-args
+  "A scenario's switches replace the manifest's, including an empty vector."
+  [manifest-args scenario]
+  (if (contains? scenario :launch-args)
+    (:launch-args scenario)
+    manifest-args))
+
 (defn runtime-opts
   "Runtime-channel options for a run — what the boundary needs that the browser
    session does not: how long to poll a condition-wait, and which app-db
@@ -114,6 +121,7 @@
                                     (:ok compiled) step/assertion-op?))
          build    (or (:build scenario) (default-build manifest))
          frame    (or (:frame scenario) (get-in manifest [:manifest/e2e :frame]))
+         args     (launch-args (get-in manifest [:manifest/e2e :launch-args]) scenario)
          session  (compile-iframe
                    (cond-> (assoc (session-opts manifest) :base-url base-url)
                     (:browser scenario) (assoc :browser (:browser scenario))
@@ -123,7 +131,8 @@
                     (contains? scenario :has-touch) (assoc :has-touch (:has-touch scenario))
                     (:device-scale-factor scenario)
                     (assoc :device-scale-factor (:device-scale-factor scenario))
-                    (:iframe scenario) (assoc :iframe (:iframe scenario))))]
+                    (:iframe scenario) (assoc :iframe (:iframe scenario))
+                    (seq args) (assoc :launch-args args)))]
      (cond
        (r/err? compiled) compiled
        (r/err? allowed)  (assoc allowed :scenario (:id scenario))

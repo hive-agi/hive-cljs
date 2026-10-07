@@ -319,11 +319,16 @@
     []
     [(str "--class=" window-class)]))
 
+(defn launch-options
+  "Compose explicit process switches with the headed window-class switch."
+  ^BrowserType$LaunchOptions [engine headless window-class launch-args]
+  (let [args (into (vec launch-args) (window-args engine headless window-class))]
+    (cond-> (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))
+      (seq args) (.setArgs ^java.util.List args))))
+
 (defn- launch-browser
-  ^Browser [^Playwright pw engine headless window-class]
-  (let [args (window-args engine headless window-class)
-        opts (cond-> (-> (BrowserType$LaunchOptions.) (.setHeadless (boolean headless)))
-               (seq args) (.setArgs ^java.util.List (vec args)))]
+  ^Browser [^Playwright pw engine headless window-class launch-args]
+  (let [opts (launch-options engine headless window-class launch-args)]
     (case engine
       :firefox (.launch (.firefox pw) opts)
       :webkit  (.launch (.webkit pw) opts)
@@ -338,11 +343,11 @@
   ports/IBrowserDriver
   (open-session! [_ {:keys [browser headless timeout-ms artifacts-dir ignore-https-errors
                             viewport user-agent is-mobile has-touch device-scale-factor iframe
-                            window-class]}]
+                            window-class launch-args]}]
     (try
       (let [^Playwright pw (Playwright/create)
             br  (launch-browser pw (or browser :chromium) (if (nil? headless) true headless)
-                                (or window-class default-window-class))
+                                (or window-class default-window-class) launch-args)
             ctx-opts (cond-> (Browser$NewContextOptions.)
                        ignore-https-errors (.setIgnoreHTTPSErrors true)
                        viewport (.setViewportSize (int (:width viewport)) (int (:height viewport)))
