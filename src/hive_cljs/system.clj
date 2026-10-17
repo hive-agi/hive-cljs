@@ -98,9 +98,10 @@
     (open! root)))
 
 (defn run-deps
-  "The `deps` map the boundary and supervisor expect."
+  "The `deps` map the boundary and supervisor expect. `:toolchain-id` rides
+   along so a refusal can name the toolchain whose channel refused."
   [session]
-  (select-keys session [:build-tool :driver :cljs-eval :http]))
+  (select-keys session [:build-tool :driver :cljs-eval :http :toolchain-id]))
 
 (defn health
   "Per-port availability for a session."

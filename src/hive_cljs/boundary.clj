@@ -16,7 +16,8 @@
             [hive-cljs.coverage :as coverage]
             [clojure.walk :as walk]
             [hive-cljs.step :as step]
-            [hive-cljs.http :as http])
+            [hive-cljs.http :as http]
+            [hive-cljs.mutation-channel :as mutation-channel])
   (:import [java.io PushbackReader]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -712,8 +713,10 @@
   "Score `plans` against a fault catalog: each fault is injected, the suite is
    re-run, and a suite that stays GREEN failed to notice it.
 
-   The unmutated baseline runs first and a red one is refused — a failing suite
-   kills every mutant for the wrong reason and would score a perfect 1.0."
+   Faults are bound to the connected runtime channel first, and one it cannot
+   carry is refused before anything runs. A red baseline is refused — it kills
+   every mutant for the wrong reason. A catalog where no fault applied is
+   `:mutation/unmeasured`, never a 0.0: nothing challenged the suite."
   [deps plans faults]
   (cond
     (empty? plans)
@@ -724,15 +727,23 @@
            {:hint "declare :faults under :hive.cljs/e2e, or pass :auto to derive them"})
 
     :else
-    (let [baseline (run-plans! deps plans)]
-      (if-not (every? #(= :pass (:run/state %)) baseline)
-        (r/err :mutation/baseline-red
-               {:hint    "the suite must be green before a mutation score means anything"
-                :summary (mapv verdict/summarize baseline)})
-        (r/ok (mutation/report
-               (mapv :plan/scenario plans)
-               (mapv (fn [f] (mutation/verdict f (run-faulted! deps plans f)))
-                     faults)))))))
+    (r/bind
+     (mutation-channel/bind-faults deps faults)
+     (fn [faults]
+       (let [baseline (run-plans! deps plans)]
+         (if-not (every? #(= :pass (:run/state %)) baseline)
+           (r/err :mutation/baseline-red
+                  {:hint    "the suite must be green before a mutation score means anything"
+                   :summary (mapv verdict/summarize baseline)})
+           (let [rep (mutation/report
+                      (mapv :plan/scenario plans)
+                      (mapv (fn [f] (mutation/verdict f (run-faulted! deps plans f)))
+                            faults))]
+             (if (mutation/measured? (:mutation/verdicts rep))
+               (r/ok rep)
+               (r/err :mutation/unmeasured
+                      {:report (dissoc rep :mutation/score)
+                       :hint   "no fault was applied on the app page; see each :fault/detail"})))))))))
 
 ;; =============================================================================
 ;; Coverage

@@ -10,7 +10,8 @@
             [hive-cljs.schema :as s]
             [hive-cljs.stub.ports :as stub]
             [hive-dsl.result :as r]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [hive-cljs.browser.page-eval :as page-eval]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -333,17 +334,19 @@
 
 (deftest a-fault-stopped-by-the-origin-guard-is-unapplied
   ;; The redirect to the IdP: the guard fails, the run goes red, and that red
-  ;; must not be counted as the suite noticing the fault.
+  ;; must not be counted as the suite noticing the fault. With nothing else in
+  ;; the catalog the suite was never challenged: unmeasured, not a 0.0.
   (let [deps {:driver    (stub/driver (fn [_ op]
                                         (if (= :hive-cljs/at-origin (:op/kind op))
                                           {:state :fail :detail "on idp" :elapsed-ms 1}
                                           {:state :pass :elapsed-ms 1})))
               :cljs-eval (stub/cljs-eval (constantly true))}
         res  (boundary/run-mutations! deps [(absolute-plan walk)] [fault])]
-    (is (r/ok? res) (pr-str res))
-    (is (= [] (:mutation/killed (:ok res))))
-    (is (= [:hole] (:mutation/unapplied (:ok res))))
-    (is (= 0.0 (:mutation/score (:ok res))))))
+    (is (r/err? res) (pr-str res))
+    (is (= :mutation/unmeasured (:error res)))
+    (is (= [] (:mutation/killed (:report res))))
+    (is (= [:hole] (:mutation/unapplied (:report res))))
+    (is (not (contains? res :mutation/score)))))
 
 (deftest a-fault-whose-eval-errors-is-unapplied
   (let [deps {:driver    (stub/driver)
@@ -352,8 +355,8 @@
                                              (r/err :eval/no-runtime {})
                                              true)))}
         res  (boundary/run-mutations! deps [(absolute-plan walk)] [fault])]
-    (is (r/ok? res) (pr-str res))
-    (is (= [:hole] (:mutation/unapplied (:ok res))))))
+    (is (= :mutation/unmeasured (:error res)) (pr-str res))
+    (is (= [:hole] (:mutation/unapplied (:report res))))))
 
 (deftest an-undeterminable-app-page-leaves-the-fault-unapplied
   (let [p   (assoc (plan-for walk) :plan/base-url "relative/only")
@@ -361,9 +364,9 @@
                                       :cljs-eval (stub/cljs-eval (constantly true))}
                                      [p] [fault])]
     (is (false? (mutation/injectable? p)))
-    (is (r/ok? res) (pr-str res))
-    (is (= [:hole] (:mutation/unapplied (:ok res))))
-    (is (= [] (:mutation/killed (:ok res))))))
+    (is (= :mutation/unmeasured (:error res)) (pr-str res))
+    (is (= [:hole] (:mutation/unapplied (:report res))))
+    (is (= [] (:mutation/killed (:report res))))))
 
 (deftest a-guarded-applied-fault-the-suite-notices-is-still-killed
   (let [res (boundary/run-mutations! (noticing-deps (atom false))
@@ -371,3 +374,91 @@
     (is (r/ok? res) (pr-str res))
     (is (= [:hole] (:mutation/killed (:ok res))))
     (is (= 1.0 (:mutation/score (:ok res))))))
+
+;; =============================================================================
+;; The fault rides the runtime channel the toolchain connected
+;; =============================================================================
+
+(def ^:private js-fault
+  {:fault/id :panel-blanked
+   :fault/form "document.querySelector('#panel').remove()"})
+
+(defn- browser-deps
+  "A `:browser` toolchain's ports: the stub driver, and the REAL page-eval
+   channel over it, which speaks JavaScript and no ClojureScript. The DOM
+   assertion fails once the page has evaluated `fault-src`."
+  [fault-src]
+  (let [broken? (atom false)
+        driver  (-> (stub/driver (fn [_ op]
+                                   (if (and @broken? (= :expect-visible (:op/kind op)))
+                                     {:state :fail :detail "the panel is gone" :elapsed-ms 1}
+                                     {:state :pass :elapsed-ms 1})))
+                    (stub/answering-page (fn [src]
+                                           (when (= fault-src src) (reset! broken? true))
+                                           true)))]
+    {:driver driver :cljs-eval (page-eval/channel driver) :toolchain-id :browser}))
+
+(deftest a-browser-channel-applies-a-source-fault-as-javascript
+  ;; The friction: on a :browser toolchain every fault went out as :eval-cljs,
+  ;; which the page-eval channel renders nothing for, so all of them came back
+  ;; :unapplied and the suite scored 0.0. The same source as :eval-js is red.
+  (let [deps (browser-deps (:fault/form js-fault))
+        res  (boundary/run-mutations! deps [(plan-for walk)] [js-fault])]
+    (is (r/ok? res) (pr-str res))
+    (is (= [:panel-blanked] (:mutation/killed (:ok res))))
+    (is (= 1.0 (:mutation/score (:ok res))))
+    (testing "the fault source reached the page verbatim, as JavaScript"
+      (is (some #(= (:fault/form js-fault) (second %))
+                (stub/page-evals (:driver deps)))))))
+
+(deftest the-fault-op-kind-is-chosen-by-what-the-channel-renders
+  (let [renders-js?   (fn [op] (= :eval-js (:op/kind op)))
+        renders-cljs? (fn [op] (contains? #{:eval-cljs :eval-js} (:op/kind op)))]
+    (testing "a ClojureScript channel keeps a source fault on :eval-cljs"
+      (is (= :eval-cljs
+             (:op/kind (mutation/fault-op (mutation/bind-fault renders-cljs? fault))))))
+    (testing "a JavaScript-only channel carries a source fault as :eval-js"
+      (let [bound (mutation/bind-fault renders-js? js-fault)]
+        (is (m/validate s/Fault bound) (pr-str (m/explain s/Fault bound)))
+        (is (= :eval-js (:op/kind (mutation/fault-op bound))))
+        (is (= [(:fault/form js-fault)] (:op/args (mutation/fault-op bound))))))
+    (testing "a FORM is ClojureScript; a JavaScript-only channel cannot carry it"
+      (is (nil? (mutation/bind-fault renders-js?
+                                     {:fault/id :f :fault/form '(set! a/b nil)}))))))
+
+(deftest a-cljs-form-fault-on-a-browser-channel-is-refused-up-front
+  (let [deps (browser-deps "never")
+        f    {:fault/id :status-hole :fault/form '(set! app/derive-status (constantly nil))}
+        res  (boundary/run-mutations! deps [(plan-for walk)] [js-fault f])]
+    (is (r/err? res))
+    (is (= :mutation/fault-channel-mismatch (:error res)))
+    (is (= :browser (:toolchain res)) "names the toolchain")
+    (is (= [:eval-js] (:channel res)) "names what the channel can carry")
+    (is (= [:status-hole] (:faults res)) "names only the faults it cannot carry")
+    (testing "up front: not even the baseline ran"
+      (is (zero? (stub/sessions-opened (:driver deps)))))))
+
+(deftest a-channel-that-renders-no-fault-at-all-is-refused-up-front
+  (testing "no runtime channel connected"
+    (let [res (boundary/run-mutations! {:driver (stub/driver) :toolchain-id :browser}
+                                       [(plan-for walk)] [js-fault])]
+      (is (= :mutation/fault-channel-mismatch (:error res)) (pr-str res))
+      (is (= :browser (:toolchain res)))
+      (is (= [] (:channel res)))))
+  (testing "a channel that speaks no step vocabulary"
+    (let [res (boundary/run-mutations! {:driver    (stub/driver)
+                                        :cljs-eval (stub/cljs-eval-without-dialect)}
+                                       [(plan-for walk)] [js-fault])]
+      (is (= :mutation/fault-channel-mismatch (:error res)) (pr-str res))
+      (is (= [] (:channel res))))))
+
+(deftest a-catalog-where-nothing-applied-is-unmeasured-never-zero
+  ;; Every fault errored on the channel: the suite was never challenged, so
+  ;; there is no score to report, not a 0.0 that reads as a blind suite.
+  (let [deps {:driver    (stub/driver)
+              :cljs-eval (stub/cljs-eval (fn [_ _] (r/err :eval/boom {})))}
+        res  (boundary/run-mutations! deps [(plan-for [[:goto "/"]])] [fault])]
+    (is (r/err? res) (pr-str res))
+    (is (= :mutation/unmeasured (:error res)))
+    (is (= [:hole] (:mutation/unapplied (:report res))))
+    (is (string? (:hint res)))))

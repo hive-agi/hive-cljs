@@ -263,12 +263,19 @@
 
 (def Fault
   "One behavioural fault: a form the runtime evaluates to break the live app.
-   A string is accepted as the escape hatch for reader macros EDN cannot carry."
+   A string is accepted as the escape hatch for reader macros EDN cannot carry,
+   and is source text in the runtime channel's OWN language — JavaScript on a
+   `:browser` page.
+
+   `:fault/op-kind` is absent until the fault is bound to a runtime channel:
+   it is the op kind that channel renders the fault through, chosen by
+   `mutation/bind-fault`, never authored."
   [:map {:closed true}
    [:fault/id :keyword]
    [:fault/form [:or NonBlankString any-form]]
    [:fault/target {:optional true} :symbol]
-   [:fault/doc {:optional true} :string]])
+   [:fault/doc {:optional true} :string]
+   [:fault/op-kind {:optional true} [:enum :eval-cljs :eval-js]]])
 
 (def FaultVerdict
   "Whether the suite noticed one fault. Killed is the GOOD outcome."
