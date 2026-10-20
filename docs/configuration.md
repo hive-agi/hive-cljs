@@ -422,6 +422,21 @@ Each entry is `{:id :target :with}` (replace a var) or `{:id :form …}`
 red. `:auto` derives a catalog from the app's own re-frame registries with no
 config at all.
 
+A fault rides the runtime channel the toolchain connected, chosen by what that
+channel renders: `:eval-cljs` on a shadow-cljs runtime, `:eval-js` on a
+`:browser` page. A string `:form` is source in that channel's own language, so
+on a `:browser` toolchain it is JavaScript:
+
+```clojure
+:faults [{:id :clock-stopped :form "window.requestAnimationFrame=function(){return 0;}"}]
+```
+
+A FORM is ClojureScript, which a `:browser` page cannot evaluate; such a fault
+is refused before anything runs, with `:mutation/fault-channel-mismatch` naming
+the toolchain, the kinds its channel carries (`:channel`) and the faults it
+cannot (`:faults`). A run where no fault was ever applied is
+`:mutation/unmeasured` rather than a 0.0 score: the suite was never challenged.
+
 ### `:hive.cljs/watch` — build → e2e coupling
 
 ```clojure

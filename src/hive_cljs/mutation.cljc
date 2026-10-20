@@ -75,16 +75,62 @@
 (defn fault-op
   "The op that applies a fault: its form, evaluated on the runtime channel.
    Built here rather than compiled, so it states its own semantics: it
-   MUTATES, and its value is reported, not asserted."
+   MUTATES, and its value is reported, not asserted.
+
+   The op kind is the one [[bind-fault]] chose for the connected channel; an
+   unbound fault is ClojureScript."
   [fault]
-  (let [src (:fault/form fault)]
-    {:op/kind       :eval-cljs
+  (let [src  (:fault/form fault)
+        kind (or (:fault/op-kind fault) :eval-cljs)]
+    {:op/kind       kind
      :op/channel    :runtime
      :op/args       [src]
      :op/assert?    false
      :op/poll?      false
      :op/read-only? false
-     :op/source     [:eval-cljs src]}))
+     :op/source     [kind src]}))
+
+(def fault-op-kinds
+  "Op kinds that evaluate a fault on a runtime channel, in the order they are
+   tried. ClojureScript first, so a channel that speaks both keeps a fault on
+   the runtime it was always evaluated by."
+  [:eval-cljs :eval-js])
+
+(defn carrier-kinds
+  "Op kinds that could carry `fault`.
+
+   Source TEXT is in the channel's own language, so either kind may carry it:
+   a string on a `:browser` page is JavaScript. A FORM is ClojureScript data,
+   and only `:eval-cljs` evaluates that."
+  [fault]
+  (if (string? (:fault/form fault)) fault-op-kinds [:eval-cljs]))
+
+(defn bind-fault
+  "`fault` bound to the first carrier kind the runtime channel renders, or nil
+   when the channel renders none of them.
+
+   `renders?` is a predicate over an op, answered by the channel's own dialect
+   — the same port that renders a scenario's runtime steps — so a fault goes
+   out on exactly the vocabulary the scenarios already proved works."
+  [renders? fault]
+  (some (fn [k]
+          (let [f (assoc fault :fault/op-kind k)]
+            (when (renders? (fault-op f)) f)))
+        (carrier-kinds fault)))
+
+(defn bind-faults
+  "Faults + a channel's `renders?` → `{:bound [Fault] :refused [fault-id]
+   :carriers [op-kind]}`. `:carriers` is what the channel can carry a fault
+   through at all; empty when it renders none."
+  [renders? faults]
+  (let [bound (mapv #(bind-fault renders? %) faults)]
+    {:bound    (filterv some? bound)
+     :refused  (vec (keep-indexed #(when (nil? (nth bound %1)) (:fault/id %2)) faults))
+     :carriers (filterv #(renders? (fault-op {:fault/id :probe :fault/form "null"
+                                              :fault/op-kind %}))
+                        fault-op-kinds)}))
+
+(m/=> bind-fault [:=> [:cat ifn? s/Fault] [:maybe s/Fault]])
 
 (def boot-barrier-kinds
   "Ops a scenario opens with to let the page come up. A fault is spliced AFTER
@@ -250,6 +296,13 @@
                           " — the suite is blind to this behaviour")})))
 
 (defn- unapplied? [v] (= :unapplied (:fault/status v)))
+
+(defn measured?
+  "True when at least one fault was applied and so challenged the suite. A
+   catalog where nothing applied has no score: 0.0 would read as a suite blind
+   to every fault, when the truth is that none of them was ever tried."
+  [verdicts]
+  (boolean (some (complement unapplied?) verdicts)))
 
 (defn score
   "Fraction of APPLIED faults the suite killed. Unapplied faults are left out
