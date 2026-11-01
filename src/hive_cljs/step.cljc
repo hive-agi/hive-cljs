@@ -10,6 +10,7 @@
             [hive-dsl.result :as r]
             [malli.core :as m]
             [hive-cljs.dialect.probe :as probe]
+            [hive-cljs.locator :as locator]
             [malli.error :as me]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -117,6 +118,80 @@
   [step-kind arity & sem]
   (fixed-rule step-kind arity :runtime :css sem))
 
+(defn- predicate-problem
+  "The step's `:step/malformed` error when `pred` is not a
+   `schema/LocatorPredicate`, else nil."
+  [step pred]
+  (when-not (m/validate s/LocatorPredicate pred)
+    (r/err :step/malformed
+           {:step step :kind (kind step) :hint locator/hint
+            :explain (me/humanize (m/explain s/LocatorPredicate pred))})))
+
+(defn- locator-rule
+  "Rule for a browser step `[kind sel pred]` asking a locator predicate
+   (`hive-cljs.locator`) of a selector. With `min-arity` 1 the predicate is
+   optional, so `[:wait-for sel]` keeps its old meaning."
+  [step-kind min-arity & sem]
+  (let [flags (semantics-of sem)]
+    (reify
+      IStepRule
+      (rule-id [_] step-kind)
+      (applies? [_ step] (= step-kind (kind step)))
+      (compile-op [_ step]
+        (let [n (count (args step))]
+          (or (when-not (<= min-arity n 2) (arity-err step 2))
+              (when (= 2 n) (predicate-problem step (second (args step))))
+              (compile-selector-arg step (op step :browser :sem flags) :playwright))))
+      IStepSemantics
+      (semantics [_] flags))))
+
+(defprotocol INestedRule
+  "Optional beside `IStepRule`: a rule whose step CONTAINS steps, compiled
+   against the same rule vector the fold is using — so a step kind added by
+   a third-party rule is usable inside it too."
+  (compile-nested [this rules step]
+    "Result of a `schema/Op`, compiling the inner steps with `rules`."))
+
+(declare compile-step default-rules)
+
+(def ^:private when-tests #{:exists :absent})
+
+(def ^:private when-rule
+  "`[:when [:exists sel] step …]` / `[:when [:absent sel] step …]`: run the
+   inner steps only when the condition holds at that moment, and pass
+   either way. A browser step: the inner steps must be browser steps too,
+   since the adapter decides the branch and runs them in one call."
+  (let [flags (semantics-of [])
+        bad   (fn [step why] (r/err :step/malformed
+                                    {:step step :kind :when :hint why}))]
+    (reify
+      IStepRule
+      (rule-id [_] :when)
+      (applies? [_ step] (= :when (kind step)))
+      (compile-op [this step] (compile-nested this default-rules step))
+      INestedRule
+      (compile-nested [_ rules step]
+        (let [[test & body] (args step)]
+          (if-not (and (vector? test) (= 2 (count test)) (when-tests (first test)) (seq body))
+            (bad step "[:when [:exists sel] step …] or [:when [:absent sel] step …]")
+            (let [csel (sel/compile-selector (second test) {:dialect :playwright})
+                  ops  (reduce (fn [acc s]
+                                 (let [res (compile-step rules s)]
+                                   (cond
+                                     (r/err? res) (reduced res)
+                                     (not= :browser (:op/channel (:ok res)))
+                                     (reduced (bad step (str "inner step " (pr-str s)
+                                                             " is not a browser step")))
+                                     :else (r/ok (conj (:ok acc) (:ok res))))))
+                               (r/ok []) body)]
+              (cond
+                (r/err? csel) (assoc csel :step step :kind :when)
+                (r/err? ops)  ops
+                :else (r/ok (assoc (op step :browser :sem flags)
+                                   :op/args [[(first test) (:ok csel)] (:ok ops)])))))))
+      IStepSemantics
+      (semantics [_] flags))))
+
 ;; =============================================================================
 ;; Rules — ordered; first match wins
 ;; =============================================================================
@@ -132,10 +207,12 @@
    (selector-rule :select 2)
    (selector-rule :check 1)
    (selector-rule :press 2)
-   (selector-rule :hover 1)])
+   (selector-rule :hover 1)
+   (selector-rule :submit 1)
+   when-rule])
 
 (def synchronisation-rules
-  [(selector-rule :wait-for 1 :read-only)
+  [(locator-rule :wait-for 1 :read-only)
    (browser-rule :wait-ms 1 :read-only)])
 
 (def ^:private no-errors-rule
@@ -159,7 +236,8 @@
       (semantics [_] flags))))
 
 (def dom-assertion-rules
-  [(selector-rule :expect-text 2 :read-only)
+  [(locator-rule :expect 2 :read-only)
+   (selector-rule :expect-text 2 :read-only)
    (selector-rule :expect-value 2 :read-only)
    (selector-rule :expect-visible 1 :read-only)
    (selector-rule :expect-hidden 1 :read-only)
@@ -344,7 +422,9 @@
 
      :else
      (if-let [rule (first (filter #(applies? % step) rules))]
-       (compile-op rule step)
+       (if (satisfies? INestedRule rule)
+         (compile-nested rule rules step)
+         (compile-op rule step))
        (r/err :step/unknown-kind {:kind (first step)
                                   :known (known-kinds rules)})))))
 
@@ -367,6 +447,31 @@
   ([rules step]
    (let [res (compile-step rules step)]
      (when (r/ok? res) (:op/channel (:ok res))))))
+
+;; =============================================================================
+;; Lint — the escape hatches point at the data step that replaces them
+;; =============================================================================
+
+(def escape-hatch-advice
+  "What to write instead of a JavaScript escape-hatch kind."
+  {:eval-js     "drive the page with data steps: [:fill sel v] [:select sel v|:first-non-empty] [:check sel] [:press sel key] [:submit form-sel], and [:when [:exists sel] step …] for a branch"
+   :wait-for-js "wait on a locator predicate: [:wait-for sel {:state :enabled}] {:value :non-empty} {:count 0} {:text \"…\"} {:absent true}"
+   :expect-js   "assert a locator predicate: [:expect sel {:state :visible}] {:value \"x\"} {:count n} {:text \"…\"} {:absent true}"})
+
+(defn lint-steps
+  "Warnings for authored `steps` (nested `:when` bodies included) that use a
+   JavaScript escape hatch where a data step would do. Advisory: the steps
+   still compile and run."
+  [steps]
+  (vec
+   (mapcat (fn [[idx step]]
+             (when (vector? step)
+               (if (= :when (first step))
+                 (map #(assoc % :index idx) (lint-steps (vec (drop 2 step))))
+                 (when-let [advice (escape-hatch-advice (first step))]
+                   [{:warning :step/js-escape-hatch :index idx :kind (first step)
+                     :step step :prefer advice}]))))
+           (map-indexed vector steps))))
 
 ;; =============================================================================
 ;; Contracts

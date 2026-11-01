@@ -10,6 +10,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [hive-cljs.dialect.probe :as probe]
+            [hive-cljs.locator :as locator]
             [hive-cljs.ports :as ports]
             [hive-cljs.selector :as selector]
             [hive-dsl.result :as r])
@@ -143,9 +144,20 @@
 
 (defmethod perform-op :select
   [session {[authored value] :op/args}]
-  (let [sel (selector-string authored)]
-    (.selectOption (dom-root session) sel (str value))
-    (pass sel)))
+  ;; `:first-non-empty` reads the option values through the locator and lets
+  ;; `hive-cljs.locator/pick-option` choose, so the choice stays testable.
+  (let [sel    (selector-string authored)
+        choice (if (= :first-non-empty value)
+                 (locator/pick-option
+                  value
+                  (map str (.allInputValues ^Locator
+                                            (.locator (dom-root session)
+                                                      (str sel " option")))))
+                 (str value))]
+    (if (nil? choice)
+      (fail (str sel " has no non-empty option"))
+      (do (.selectOption (dom-root session) sel ^String choice)
+          (pass (str sel " = " choice))))))
 
 (defmethod perform-op :check
   [session {[authored] :op/args}]
@@ -165,11 +177,76 @@
     (.hover (dom-root session) sel)
     (pass sel)))
 
+(def default-predicate-timeout-ms
+  "How long `[:wait-for sel pred]` polls when the session carries no
+   `:timeout-ms` of its own."
+  15000)
+
+(defn locator-facts
+  "The facts `hive-cljs.locator/judge` needs about `sel`, read through
+   Playwright's Locator API: the match count, and the first match's state,
+   value and text when the predicate asks for them and something matches."
+  [session sel needed]
+  (let [^Locator loc (.locator (dom-root session) ^String sel)
+        n            (.count loc)
+        ^Locator one (.first loc)
+        ask?         (fn [k] (and (pos? n) (contains? needed k)))]
+    (cond-> {:count n}
+      (ask? :visible)  (assoc :visible (.isVisible one))
+      (ask? :enabled)  (assoc :enabled (.isEnabled one))
+      (ask? :checked)  (assoc :checked (.isChecked one))
+      (ask? :editable) (assoc :editable (.isEditable one))
+      (ask? :value)    (assoc :value (.inputValue one))
+      (ask? :text)     (assoc :text (.textContent one)))))
+
+(defn- judge-now
+  [session sel pred]
+  (locator/judge pred (locator-facts session sel (locator/facts-needed pred))))
+
 (defmethod perform-op :wait-for
-  [session {[authored] :op/args}]
+  [session {[authored pred] :op/args}]
   (let [sel (selector-string authored)]
-    (.waitForSelector (dom-root session) sel)
+    (if (nil? pred)
+      (do (.waitForSelector (dom-root session) sel)
+          (pass sel))
+      (let [deadline (+ (System/currentTimeMillis)
+                        (or (:timeout-ms session) default-predicate-timeout-ms))]
+        (loop []
+          (let [{:keys [held? detail]} (judge-now session sel pred)]
+            (cond
+              held? (pass (str sel ": " detail))
+              (< (System/currentTimeMillis) deadline) (do (Thread/sleep 100) (recur))
+              :else (fail (str sel " never held: " detail)))))))))
+
+(defmethod perform-op :expect
+  [session {[authored pred] :op/args}]
+  (let [sel (selector-string authored)
+        {:keys [held? detail]} (judge-now session sel pred)]
+    (if held? (pass (str sel ": " detail)) (fail (str sel ": " detail)))))
+
+(defmethod perform-op :submit
+  [session {[authored] :op/args}]
+  ;; requestSubmit, not submit(): it runs constraint validation and fires the
+  ;; form's `submit` event, which is what an app's handler listens to.
+  (let [sel (selector-string authored)]
+    (.evaluate (.locator (dom-root session) sel)
+               "f => (f.requestSubmit ? f.requestSubmit() : f.submit())")
     (pass sel)))
+
+(defmethod perform-op :when
+  [session op]
+  (let [[[test authored]] (:op/args op)
+        sel (selector-string authored)
+        n   (.count (.locator (dom-root session) ^String sel))
+        ops (locator/branch-ops op n)]
+    (if (empty? ops)
+      (pass (str "skipped: " (name test) " " sel " did not hold"))
+      (or (some (fn [inner]
+                  (let [out (perform-op session inner)]
+                    (when-not (= :pass (:state out)) out)))
+                ops)
+          (pass (str (name test) " " sel ": ran " (count ops) " step(s)"))))))
+
 
 (defmethod perform-op :wait-ms
   [session {[ms] :op/args}]
@@ -363,6 +440,7 @@
               _       (record-errors! page errors)
               session (cond-> {:pw pw :browser br :context ctx :page page :errors errors
                                :artifacts-dir (or artifacts-dir ".hive-cljs/artifacts")}
+                        timeout-ms (assoc :timeout-ms timeout-ms)
                         iframe (assoc :iframe iframe))]
           (swap! pw-atom conj session)
           (r/ok session)))
