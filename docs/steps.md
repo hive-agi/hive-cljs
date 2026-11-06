@@ -99,13 +99,54 @@ default.
 | `[:check :#agree]` | check a checkbox |
 | `[:press :#user "Enter"]` | press a key on an element |
 | `[:hover :#menu]` | hover |
+| `[:select :#team :first-non-empty]` | choose the first option whose value is not blank |
+| `[:submit :form.owner]` | submit a form with `requestSubmit()`, so validation and the `submit` event run |
+| `[:when [:exists :form.owner] step …]` | run the inner steps only if the selector matches now; passes either way |
+| `[:when [:absent :.team] step …]` | the same, when nothing matches |
+
+`:fill`, `:select`, `:check` and `:press` go through Playwright's own locator
+API, which fires the real `input`/`change`/key events, so no scenario needs to
+build a `dispatchEvent` by hand. The inner steps of `:when` must be browser
+steps; a malformed one fails the plan, like any other step.
 
 ### Synchronisation
 
 | Step | Does |
 |---|---|
 | `[:wait-for :#chart]` | wait for a selector to appear |
+| `[:wait-for :#chart {:state :visible}]` | poll a **locator predicate** until it holds (the session's `:timeout-ms`) |
 | `[:wait-ms 250]` | fixed pause — a last resort |
+
+### Locator predicates
+
+`[:wait-for sel pred]` polls and `[:expect sel pred]` asserts once. `pred` is a
+map; every key present must hold:
+
+| Key | Holds when |
+|---|---|
+| `:state` | the first match is `:visible` `:hidden` `:attached` `:detached` `:enabled` `:disabled` `:checked` `:unchecked` `:editable` (`:hidden`/`:detached` also hold with no match) |
+| `:value` | the first match's input value is exactly the string, or `:non-empty` / `:empty` |
+| `:count` | exactly N elements match (`{:count 0}` waits for something to go away) |
+| `:text` | the first match's text CONTAINS the string (a regex too, in a `defscenarios` scenario) |
+| `:absent` | `true`: nothing matches; `false`: something does |
+
+```clojure
+[[:wait-for ".member-bar form.owner, .member-bar select" {:state :attached}]
+ [:when [:exists ".member-bar form.owner input"]
+  [:fill ".member-bar form.owner input" "Dono E2E"]
+  [:wait-for ".member-bar form.owner button[type=submit]" {:state :enabled}]
+  [:submit ".member-bar form.owner"]]
+ [:select ".member-bar select" :first-non-empty]
+ [:wait-for ".member-bar select" {:value :non-empty}]]
+```
+
+The adapter only reads facts (count, state, value, text) through the locator;
+`hive-cljs.locator/judge` decides, so a failure says what was seen:
+`state enabled, saw {:count 1, :enabled false}`.
+
+`:eval-js`, `:expect-js` and `:wait-for-js` remain as escape hatches.
+`hive-cljs.step/lint-steps` returns a `:step/js-escape-hatch` warning for each
+one, naming the data step that replaces it.
 
 ### DOM assertions
 

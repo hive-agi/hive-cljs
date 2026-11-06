@@ -109,6 +109,42 @@
    [:sources {:optional true} [:set [:enum :console :pageerror]]]
    [:ignore {:optional true} [:vector :string]]])
 
+(def LocatorState
+  "A state a locator predicate's `:state` asks for."
+  [:enum :visible :hidden :attached :detached :enabled :disabled :checked :unchecked :editable])
+
+(def LocatorPredicateData
+  "A predicate over a selector's matches, authored as EDN data — the
+   argument of `[:wait-for sel pred]` and `[:expect sel pred]`. Every key
+   present must hold:
+
+   - `:state`  one of `LocatorState`, judged on the first match
+   - `:value`  the first match's input value: exact text, `:non-empty` or `:empty`
+   - `:count`  exactly this many matches
+   - `:text`   the first match's text CONTAINS this substring
+   - `:absent` true: nothing matches; false: something does"
+  [:and
+   [:map {:closed true}
+    [:state {:optional true} LocatorState]
+    [:value {:optional true} [:or :string [:enum :non-empty :empty]]]
+    [:count {:optional true} [:int {:min 0}]]
+    [:text {:optional true} :string]
+    [:absent {:optional true} :boolean]]
+   [:fn {:error/message "a locator predicate must ask something"} seq]])
+
+(def LocatorPredicate
+  "`LocatorPredicateData`, plus a regex `:text` for scenarios authored in
+   Clojure (`defscenarios`), where a regex has a spelling."
+  [:and
+   [:map {:closed true}
+    [:state {:optional true} LocatorState]
+    [:value {:optional true} [:or :string [:enum :non-empty :empty]]]
+    [:count {:optional true} [:int {:min 0}]]
+    [:text {:optional true} [:or :string [:fn #?(:clj #(instance? java.util.regex.Pattern %)
+                                                 :cljs regexp?)]]]
+    [:absent {:optional true} :boolean]]
+   [:fn {:error/message "a locator predicate must ask something"} seq]])
+
 (def HttpMethod
   [:enum :get :post :put :patch :delete :head :options])
 
