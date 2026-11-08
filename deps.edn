@@ -4,7 +4,7 @@
  {org.clojure/clojure           {:mvn/version "1.12.6"}
 
   ;; hive-addon — IAddon protocol + CLI subcommand dispatcher (host bridge)
-  io.github.hive-agi/hive-addon {:mvn/version "1.1.8"}
+  io.github.hive-agi/hive-addon {:mvn/version "1.1.10"}
 
   ;; hive-dsl — Result monad, ADTs, error taxonomy
   io.github.hive-agi/hive-dsl   {:mvn/version "0.5.37"}
