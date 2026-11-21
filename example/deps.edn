@@ -1,7 +1,7 @@
 {:paths ["src" "public"]
- :deps {org.clojure/clojure {:mvn/version "1.12.1"}
-        thheller/shadow-cljs {:mvn/version "3.4.11"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.6"}
+        thheller/shadow-cljs {:mvn/version "3.5.7"}
         reagent/reagent {:mvn/version "1.2.0"}
-        re-frame/re-frame {:mvn/version "1.4.3"}
-        nrepl/nrepl {:mvn/version "1.7.0"}
+        re-frame/re-frame {:mvn/version "1.4.7"}
+        nrepl/nrepl {:mvn/version "1.8.0"}
         cider/cider-nrepl {:mvn/version "0.58.0"}}}
