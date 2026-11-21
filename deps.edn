@@ -4,7 +4,7 @@
  {org.clojure/clojure           {:mvn/version "1.12.6"}
 
   ;; hive-addon — IAddon protocol + CLI subcommand dispatcher (host bridge)
-  io.github.hive-agi/hive-addon {:mvn/version "1.1.10"}
+  io.github.hive-agi/hive-addon {:mvn/version "1.1.13"}
 
   ;; hive-dsl — Result monad, ADTs, error taxonomy
   io.github.hive-agi/hive-dsl   {:mvn/version "0.6.2"}
@@ -66,5 +66,5 @@
   ;; the pure decision; it is on :build and :test, never in the jar.
   :build
   {:paths ["." "build"]
-   :deps {io.github.hive-agi/hive-build {:mvn/version "0.2.1"}}
+   :deps {io.github.hive-agi/hive-build {:mvn/version "0.3.1"}}
    :ns-default build}}}
